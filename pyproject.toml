@@ -1,0 +1,13 @@
+[project]
+name = "real-time-agents"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.116.1",
+    "ipython>=9.5.0",
+    "openai-agents[voice]>=0.2.11",
+    "uvicorn>=0.35.0",
+    "websockets>=15.0.1",
+]
