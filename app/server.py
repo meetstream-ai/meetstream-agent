@@ -19,7 +19,7 @@ from agents.realtime import RealtimeRunner, RealtimeSession, RealtimeSessionEven
 try:
     from .agent import get_starting_agent  # when used as a package
 except Exception:
-    from app.agent import get_starting_agent     # when run directly
+    from agent import get_starting_agent     # when run directly
 
 import os, numpy as np
 try:
@@ -512,4 +512,4 @@ async def index():
 # ----- Entrypoint ----------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("combined_server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
