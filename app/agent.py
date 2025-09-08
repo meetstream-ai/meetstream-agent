@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import json
 import logging
+import subprocess
 from typing import Optional, List
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -188,6 +189,20 @@ def build_mcp_servers_default() -> List[object]:
             pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"])
         else:
             pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
+
+    # Ensure the requested Playwright browser is installed
+    try:
+        # Check if the Playwright browser is installed; if not, install it
+        check_cmd = ["npx", "playwright", "launch-server", f"--browser={PW_BROWSER}", "--help"]
+        subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    except Exception:
+        install_cmd = ["npx", "-y", "playwright@latest", "install", "--with-deps", PW_BROWSER]
+        try:
+            subprocess.run(install_cmd, check=True)
+            logging.info(f"Installed Playwright browser: {PW_BROWSER}")
+        except Exception as e:
+            logging.error(f"Failed to auto-install Playwright browser {PW_BROWSER}: {e}")
+
     pw_params = MCPServerStdioParams(
         command="npx",
         args=pw_args,
@@ -216,6 +231,7 @@ def build_mcp_servers_default() -> List[object]:
             client_session_timeout_seconds=90,
         ))
 
+
     # C) n8n MCP (remote via stdio) — no auth by default
     # Prefer using the MCP Remote transport over stdio using `npx mcp-remote <url>`.
     n8n_remote_url = os.getenv("N8N_MCP_SSE_URL") or \
@@ -239,6 +255,22 @@ def build_mcp_servers_default() -> List[object]:
             cache_tools_list=True,
             client_session_timeout_seconds=120,
         ))
+
+    # D) Canva MCP (remote via stdio)
+    canva_url = "https://mcp.canva.com/mcp"
+    canva_args = ["-y", "mcp-remote@latest", canva_url]
+
+    canva_stdio = MCPServerStdioParams(
+        command="npx",
+        args=canva_args,
+        env={"PATH": os.getenv("PATH", "")},
+    )
+    servers.append(MCPServerStdio(
+        name="canva",
+        params=canva_stdio,
+        cache_tools_list=True,
+        client_session_timeout_seconds=120,
+    ))
 
     return servers
 
@@ -306,7 +338,7 @@ Prefer tools when available:
 - Use `weather_now` for current weather.
 - Use Playwright MCP tools for browsing (e.g., `browser_navigate`, `browser_wait_for_selector`,
   `browser_take_screenshot`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_install`).
-- Use Framer MCP tools for UI/component/design actions if present.
+- Use Canva MCP tools for UI/component/design actions if present.
 - Use n8n MCP tools for workflows if present.
 
 Keep spoken responses concise and avoid repeating prior text verbatim.

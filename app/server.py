@@ -267,18 +267,51 @@ class BridgeManager:
                             "bot_id": bot_id
                         })
 
-                    # Forward tool outputs (e.g., Playwright search results) to Meetstream control
+                    # Forward tool outputs (e.g., Playwright search results, Canva designs) to Meetstream control
                     if payload.get("type") == "tool_end":
-                        tool_output = payload.get("output")
-                        if tool_output:
-                            try:
-                                await _safe_send(ws, {
-                                    "command": "sendmsg",
-                                    "message": str(tool_output),
-                                    "bot_id": bot_id
-                                })
-                            except Exception as e:
-                                logger.warning(f"failed to forward tool output for {bot_id}: {e}")
+                        tool_name = payload.get("tool")
+                        raw_output = payload.get("output")
+                        pretty_message = None
+                        # Try to parse JSON-like outputs (Canva returns JSON with job/result/generated_designs)
+                        try:
+                            parsed = None
+                            if isinstance(raw_output, str):
+                                # raw_output is often a JSON string; attempt to load
+                                parsed = json.loads(raw_output)
+                            elif isinstance(raw_output, dict):
+                                parsed = raw_output
+                            if isinstance(parsed, dict):
+                                job = parsed.get("job")
+                                if isinstance(job, dict):
+                                    result = job.get("result") or {}
+                                    designs = result.get("generated_designs") or []
+                                    links = []
+                                    for d in designs:
+                                        if not isinstance(d, dict):
+                                            continue
+                                        url = d.get("url")
+                                        thumb = (d.get("thumbnail") or {}).get("url") if isinstance(d.get("thumbnail"), dict) else None
+                                        if url:
+                                            links.append((url, thumb))
+                                    if links:
+                                        lines = ["Canva designs generated:" if (tool_name and "canva" in tool_name.lower()) else "Designs generated:"]
+                                        for i, (u, t) in enumerate(links, start=1):
+                                            line = f"{i}. {u}"
+                                            if t:
+                                                line += f" (thumb: {t})"
+                                            lines.append(line)
+                                        pretty_message = "\n".join(lines)
+                        except Exception:
+                            # Ignore parse errors and fall back to raw output
+                            pretty_message = None
+                        try:
+                            await _safe_send(ws, {
+                                "command": "sendmsg",
+                                "message": pretty_message if pretty_message else (str(raw_output) if raw_output is not None else ""),
+                                "bot_id": bot_id
+                            })
+                        except Exception as e:
+                            logger.warning(f"failed to forward tool output for {bot_id}: {e}")
 
                 # --- 3) (Optional) Mirror to browser UI for debugging ---
                 ui_session_id = self.bot_to_ui.get(bot_id)
