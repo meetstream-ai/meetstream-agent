@@ -27,6 +27,29 @@ class RealtimeDemo {
         this.eventsContent = document.getElementById('eventsContent');
         this.toolsContent = document.getElementById('toolsContent');
     }
+
+    /**
+     * Derive WebSocket base dynamically so the app works on localhost, VMs, and behind proxies.
+     * Priority:
+     * 1) <meta name="ws-base" content="wss://your-host:port/basepath">
+     * 2) Build from window.location (protocol/host), optionally with <meta name="ws-path">.
+     */
+    getWsBase() {
+        // 1) explicit override via meta tag
+        const metaBase = document.querySelector('meta[name="ws-base"]');
+        if (metaBase && metaBase.content) {
+            return metaBase.content.replace(/\/+$/, '');
+        }
+        // 2) infer from current location
+        const proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+        const host = window.location.host; // includes port if any
+        let extraPath = '';
+        const metaPath = document.querySelector('meta[name="ws-path"]');
+        if (metaPath && metaPath.content) {
+            extraPath = '/' + metaPath.content.replace(/^\/+|\/+$/g, '');
+        }
+        return `${proto}://${host}${extraPath}`;
+    }
     
     setupEventListeners() {
         this.connectBtn.addEventListener('click', () => {
@@ -43,33 +66,40 @@ class RealtimeDemo {
     }
     
     generateSessionId() {
-        return 'session_' + Math.random().toString(36).substr(2, 9);
+        if (window.crypto && window.crypto.getRandomValues) {
+            const buf = new Uint8Array(16);
+            window.crypto.getRandomValues(buf);
+            const hex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+            return `session_${hex}`;
+        }
+        return 'session_' + Math.random().toString(36).slice(2, 11);
     }
     
     async connect() {
         try {
-            this.ws = new WebSocket(`ws://localhost:8000/ws/${this.sessionId}`);
-            
+            const wsBase = this.getWsBase();
+            this.ws = new WebSocket(`${wsBase}/ws/${this.sessionId}`);
+
             this.ws.onopen = () => {
                 this.isConnected = true;
                 this.updateConnectionUI();
                 this.startContinuousCapture();
             };
-            
+
             this.ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 this.handleRealtimeEvent(data);
             };
-            
+
             this.ws.onclose = () => {
                 this.isConnected = false;
                 this.updateConnectionUI();
             };
-            
+
             this.ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
             };
-            
+
         } catch (error) {
             console.error('Failed to connect:', error);
         }
