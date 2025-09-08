@@ -169,11 +169,11 @@ def build_mcp_servers_default() -> List[object]:
         pw_args.append("--save-session")
 
     # blocked / allowed origins (all optional now)
+    pw_args.append("--isolated")
     if PW_BLOCKED_ORIGINS:
         pw_args.extend(["--blocked-origins", PW_BLOCKED_ORIGINS])
     if PW_ALLOWED_ORIGINS:
         pw_args.extend(["--allowed-origins", PW_ALLOWED_ORIGINS])
-
     if PW_HEADLESS in ("1", "true", "yes"):
         pw_args.append("--headless")
     if PW_PROXY:
