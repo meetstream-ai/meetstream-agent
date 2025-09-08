@@ -165,7 +165,7 @@ def build_mcp_servers_default() -> List[object]:
     ))
 
     # B) Framer MCP (SSE) — env or fallback URL
-    framer_url = "https://mcp.unframer.co/sse?id=f6b7d9348abed570aafe96724fe7e42183ae4275a28991e4d3153cb992691ecc&secret=1H4c6ydjR516HUg3z6NCKmnK6RegD1Eq"
+    framer_url = "https://mcp.unframer.co/sse?id=f6b7d9348abed570aafe96724fe7e42183ae4275a28991e4d3153cb992691ecc&secret=JPgjkrB23zUxc8feL5RPBG4zwQ4d3iuw"
     if framer_url:
         fr_params = MCPServerSseParams(
             url=framer_url,
@@ -178,6 +178,31 @@ def build_mcp_servers_default() -> List[object]:
             params=fr_params,
             cache_tools_list=True,
             client_session_timeout_seconds=90,
+        ))
+
+    # C) n8n MCP (remote via stdio) — no auth by default
+    # Prefer using the MCP Remote transport over stdio using `npx mcp-remote <url>`.
+    n8n_remote_url = os.getenv("N8N_MCP_SSE_URL") or \
+                     os.getenv("N8N_MCP_REMOTE_URL") or \
+                     "https://n8n.meetstream.ai/mcp/41d3dd13-a7bb-4f4b-95fd-430c98dd4ed7/sse"
+    n8n_auth = os.getenv("N8N_MCP_AUTH") or os.getenv("AUTH_TOKEN")
+    if n8n_remote_url:
+        n8n_args = ["-y", "mcp-remote", n8n_remote_url]
+        # If an auth token is present, pass an Authorization header
+        if n8n_auth:
+            n8n_args += ["--header", f"Authorization: Bearer {n8n_auth}"]
+        n8n_stdio = MCPServerStdioParams(
+            command="npx",
+            args=n8n_args,
+            env={
+                "PATH": os.getenv("PATH", ""),
+            },
+        )
+        servers.append(MCPServerStdio(
+            name="n8n",
+            params=n8n_stdio,
+            cache_tools_list=True,
+            client_session_timeout_seconds=120,
         ))
 
     return servers
@@ -207,13 +232,19 @@ class _MCPRegistry:
             return
         names = [getattr(s, "name", "<unnamed>") for s in self.servers]
         logging.info(f"MCP servers to connect: {names}")
+        connected: List[object] = []
         for s in self.servers:
             try:
                 if hasattr(s, "connect"):
-                    await s.connect()
-                    logging.info(f"Connected MCP: {getattr(s, 'name', '<unnamed>')}")
+                    is_connected = getattr(s, "is_connected", False)
+                    if not is_connected:
+                        await s.connect()
+                connected.append(s)
+                logging.info(f"Connected MCP: {getattr(s, 'name', '<unnamed>')}")
             except Exception as e:
                 logging.error(f"Failed to connect MCP server {getattr(s,'name','<unnamed>')}: {e}")
+        # Only keep the successfully connected servers
+        self.servers = connected
         self._connected = True
 
 
@@ -241,6 +272,7 @@ Prefer tools when available:
 - Use Playwright MCP tools for browsing (e.g., `browser_navigate`, `browser_wait_for_selector`,
   `browser_take_screenshot`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_install`).
 - Use Framer MCP tools for UI/component/design actions if present.
+- Use n8n MCP tools for workflows if present.
 
 Keep spoken responses concise and avoid repeating prior text verbatim.
 """

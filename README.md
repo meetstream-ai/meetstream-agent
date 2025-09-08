@@ -38,7 +38,15 @@ To have uv also install the required Python:
 uv python install
 uv sync
 ```
+## Node.js Setup (if needed)
 
+If your project also requires Node.js (for frontend or tooling), install it using [nvm](https://github.com/nvm-sh/nvm):
+
+```sh
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+# restart your shell, then:
+nvm install --lts
+```
 ## Running the App
 
 You can run without activating the virtualenv:
