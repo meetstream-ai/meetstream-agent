@@ -267,6 +267,19 @@ class BridgeManager:
                             "bot_id": bot_id
                         })
 
+                    # Forward tool outputs (e.g., Playwright search results) to Meetstream control
+                    if payload.get("type") == "tool_end":
+                        tool_output = payload.get("output")
+                        if tool_output:
+                            try:
+                                await _safe_send(ws, {
+                                    "command": "sendmsg",
+                                    "message": str(tool_output),
+                                    "bot_id": bot_id
+                                })
+                            except Exception as e:
+                                logger.warning(f"failed to forward tool output for {bot_id}: {e}")
+
                 # --- 3) (Optional) Mirror to browser UI for debugging ---
                 ui_session_id = self.bot_to_ui.get(bot_id)
                 if ui_session_id and ui_session_id in self.ui_ws:
