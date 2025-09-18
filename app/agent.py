@@ -216,7 +216,7 @@ def build_mcp_servers_default() -> List[object]:
     ))
 
     # B) Framer MCP (SSE) — env or fallback URL
-    framer_url = "https://mcp.unframer.co/sse?id=f6b7d9348abed570aafe96724fe7e42183ae4275a28991e4d3153cb992691ecc&secret=JPgjkrB23zUxc8feL5RPBG4zwQ4d3iuw"
+    framer_url = os.getenv("FRAMER_MCP_SSE_URL")
     if framer_url:
         fr_params = MCPServerSseParams(
             url=framer_url,
