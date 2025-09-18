@@ -248,8 +248,17 @@
             color: #dc3545;
         }
     </style>
+    <!-- Optional overrides for WebSocket base/path when running behind proxies or on VMs.
+         Example:
+         <meta name="ws-base" content="wss://agent.meetstream.ai">
+         <meta name="ws-path" content="/bridge">
+    -->
 </head>
 <body>
+    <div id="insecureWarning" style="display:none; background:#fff3cd; color:#664d03; border:1px solid #ffecb5; padding:10px 14px; font-size:0.9rem;">
+        ⚠️ Microphone capture requires a secure context (HTTPS) or localhost. 
+        <a id="tryHttpsLink" href="#" style="margin-left:8px; color:#0d6efd; text-decoration:underline;">Try HTTPS</a>
+    </div>
     <div class="header">
         <h1>Realtime Demo</h1>
         <button id="connectBtn" class="connect-btn disconnected">Connect</button>

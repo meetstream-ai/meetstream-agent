@@ -17,6 +17,8 @@ class RealtimeDemo {
         
         this.initializeElements();
         this.setupEventListeners();
+        // Show HTTPS/localhost warning if needed
+        this.showInsecureBannerIfNeeded();
     }
     
     initializeElements() {
@@ -26,29 +28,6 @@ class RealtimeDemo {
         this.messagesContent = document.getElementById('messagesContent');
         this.eventsContent = document.getElementById('eventsContent');
         this.toolsContent = document.getElementById('toolsContent');
-    }
-
-    /**
-     * Derive WebSocket base dynamically so the app works on localhost, VMs, and behind proxies.
-     * Priority:
-     * 1) <meta name="ws-base" content="wss://your-host:port/basepath">
-     * 2) Build from window.location (protocol/host), optionally with <meta name="ws-path">.
-     */
-    getWsBase() {
-        // 1) explicit override via meta tag
-        const metaBase = document.querySelector('meta[name="ws-base"]');
-        if (metaBase && metaBase.content) {
-            return metaBase.content.replace(/\/+$/, '');
-        }
-        // 2) infer from current location
-        const proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-        const host = window.location.host; // includes port if any
-        let extraPath = '';
-        const metaPath = document.querySelector('meta[name="ws-path"]');
-        if (metaPath && metaPath.content) {
-            extraPath = '/' + metaPath.content.replace(/^\/+|\/+$/g, '');
-        }
-        return `${proto}://${host}${extraPath}`;
     }
     
     setupEventListeners() {
@@ -66,40 +45,37 @@ class RealtimeDemo {
     }
     
     generateSessionId() {
-        if (window.crypto && window.crypto.getRandomValues) {
-            const buf = new Uint8Array(16);
-            window.crypto.getRandomValues(buf);
-            const hex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
-            return `session_${hex}`;
-        }
-        return 'session_' + Math.random().toString(36).slice(2, 11);
+        return 'session_' + Math.random().toString(36).substr(2, 9);
     }
     
     async connect() {
         try {
-            const wsBase = this.getWsBase();
-            this.ws = new WebSocket(`${wsBase}/ws/${this.sessionId}`);
-
+            this.ws = new WebSocket(`ws://localhost:8000/ws/${this.sessionId}`);
+            
             this.ws.onopen = () => {
                 this.isConnected = true;
                 this.updateConnectionUI();
-                this.startContinuousCapture();
+                if (this.isSecureForMic()) {
+                    this.startContinuousCapture();
+                } else {
+                    this.addMessage('assistant', 'Connected ✅ — but mic capture is disabled on HTTP. Switch to HTTPS to enable audio.');
+                }
             };
-
+            
             this.ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 this.handleRealtimeEvent(data);
             };
-
+            
             this.ws.onclose = () => {
                 this.isConnected = false;
                 this.updateConnectionUI();
             };
-
+            
             this.ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
             };
-
+            
         } catch (error) {
             console.error('Failed to connect:', error);
         }
@@ -149,9 +125,12 @@ class RealtimeDemo {
     async startContinuousCapture() {
         if (!this.isConnected || this.isCapturing) return;
         
-        // Check if getUserMedia is available
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            throw new Error('getUserMedia not available. Please use HTTPS or localhost.');
+        // Check if getUserMedia is available and we are in a secure context
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !this.isSecureForMic()) {
+            console.warn('Microphone capture requires HTTPS or localhost. Skipping mic start.');
+            this.addMessage('assistant', '🎙️ Mic is unavailable because this page is not being served over HTTPS (or localhost). Connect is fine, but I won’t capture audio until you switch to HTTPS.');
+            this.showInsecureBannerIfNeeded();
+            return; // Do not throw; allow the app to keep running without mic
         }
         
         try {
@@ -488,6 +467,36 @@ class RealtimeDemo {
     
     scrollToBottom() {
         this.messagesContent.scrollTop = this.messagesContent.scrollHeight;
+    }
+
+    // Returns true if HTTPS or localhost or secure context for microphone
+    isSecureForMic() {
+        const hn = window.location.hostname;
+        if (window.isSecureContext) return true;
+        if (hn === 'localhost' || hn === '127.0.0.1' || hn.endsWith('.localhost')) return true;
+        return false;
+    }
+
+    showInsecureBannerIfNeeded() {
+        const banner = document.getElementById('insecureWarning');
+        const link = document.getElementById('tryHttpsLink');
+        if (!banner) return;
+        if (!this.isSecureForMic()) {
+            banner.style.display = 'block';
+            if (link) {
+                try {
+                    // Offer an HTTPS link to same host/path
+                    const httpsUrl = new URL(window.location.href);
+                    httpsUrl.protocol = 'https:';
+                    link.href = httpsUrl.toString();
+                    link.onclick = (e) => {
+                        // allow default navigation
+                    };
+                } catch {}
+            }
+        } else {
+            banner.style.display = 'none';
+        }
     }
 }
 
