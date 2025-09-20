@@ -142,78 +142,78 @@ def build_mcp_servers_default() -> List[object]:
     servers: List[object] = []
 
     # A) Playwright MCP (stdio) — no API key; anti-captcha flags
-    PW_BROWSER = os.getenv("PW_BROWSER", "chromium")
-    PW_HEADLESS = os.getenv("PW_HEADLESS", "1").lower()
-    PW_PROXY = os.getenv("PW_PROXY")
-    PW_UA = os.getenv("PW_UA")
-    PW_ALLOWED_ORIGINS = os.getenv("PW_ALLOWED_ORIGINS")
-    # New env reads
-    PW_SAVE_SESSION = os.getenv("PW_SAVE_SESSION", "1").lower()
-    PW_USER_DATA_DIR = os.getenv("PW_USER_DATA_DIR")
-    PW_BLOCKED_ORIGINS = os.getenv("PW_BLOCKED_ORIGINS")
+    # PW_BROWSER = os.getenv("PW_BROWSER", "chromium")
+    # PW_HEADLESS = os.getenv("PW_HEADLESS", "1").lower()
+    # PW_PROXY = os.getenv("PW_PROXY")
+    # PW_UA = os.getenv("PW_UA")
+    # PW_ALLOWED_ORIGINS = os.getenv("PW_ALLOWED_ORIGINS")
+    # # New env reads
+    # PW_SAVE_SESSION = os.getenv("PW_SAVE_SESSION", "1").lower()
+    # PW_USER_DATA_DIR = os.getenv("PW_USER_DATA_DIR")
+    # PW_BLOCKED_ORIGINS = os.getenv("PW_BLOCKED_ORIGINS")
 
-    pw_args = [
-        "-y", "@playwright/mcp@latest",
-        "--browser", PW_BROWSER,
-        "--viewport-size=1366,820",
-        # user-data-dir, save-session, blocked-origins, allowed-origins handled below
-    ]
+    # pw_args = [
+    #     "-y", "@playwright/mcp@latest",
+    #     "--browser", PW_BROWSER,
+    #     "--viewport-size=1366,820",
+    #     # user-data-dir, save-session, blocked-origins, allowed-origins handled below
+    # ]
 
-    # profile persistence / cookies
-    if PW_USER_DATA_DIR:
-        pw_args.extend(["--user-data-dir", PW_USER_DATA_DIR])
-    else:
-        # default persistent profile unless disabled
-        default_profile = os.path.expanduser("~/.cache/ms-playwright/mcp-chrome-profile")
-        pw_args.extend(["--user-data-dir", default_profile])
-    if PW_SAVE_SESSION in ("1", "true", "yes"):
-        pw_args.append("--save-session")
+    # # profile persistence / cookies
+    # if PW_USER_DATA_DIR:
+    #     pw_args.extend(["--user-data-dir", PW_USER_DATA_DIR])
+    # else:
+    #     # default persistent profile unless disabled
+    #     default_profile = os.path.expanduser("~/.cache/ms-playwright/mcp-chrome-profile")
+    #     pw_args.extend(["--user-data-dir", default_profile])
+    # if PW_SAVE_SESSION in ("1", "true", "yes"):
+    #     pw_args.append("--save-session")
 
-    # blocked / allowed origins (all optional now)
-    pw_args.append("--isolated")
-    if PW_BLOCKED_ORIGINS:
-        pw_args.extend(["--blocked-origins", PW_BLOCKED_ORIGINS])
-    if PW_ALLOWED_ORIGINS:
-        pw_args.extend(["--allowed-origins", PW_ALLOWED_ORIGINS])
-    if PW_HEADLESS in ("1", "true", "yes"):
-        pw_args.append("--headless")
-    if PW_PROXY:
-        pw_args.extend(["--proxy", PW_PROXY])
-    if PW_UA:
-        pw_args.extend(["--user-agent", PW_UA])
-    else:
-        # Default UA matches the selected browser reasonably well
-        if PW_BROWSER.lower() in ("chromium", "chrome"):
-            pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"])
-        elif PW_BROWSER.lower() == "firefox":
-            pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"])
-        else:
-            pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
+    # # blocked / allowed origins (all optional now)
+    # pw_args.append("--isolated")
+    # if PW_BLOCKED_ORIGINS:
+    #     pw_args.extend(["--blocked-origins", PW_BLOCKED_ORIGINS])
+    # if PW_ALLOWED_ORIGINS:
+    #     pw_args.extend(["--allowed-origins", PW_ALLOWED_ORIGINS])
+    # if PW_HEADLESS in ("1", "true", "yes"):
+    #     pw_args.append("--headless")
+    # if PW_PROXY:
+    #     pw_args.extend(["--proxy", PW_PROXY])
+    # if PW_UA:
+    #     pw_args.extend(["--user-agent", PW_UA])
+    # else:
+    #     # Default UA matches the selected browser reasonably well
+    #     if PW_BROWSER.lower() in ("chromium", "chrome"):
+    #         pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"])
+    #     elif PW_BROWSER.lower() == "firefox":
+    #         pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"])
+    #     else:
+    #         pw_args.extend(["--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
 
-    # Ensure the requested Playwright browser is installed
-    try:
-        # Check if the Playwright browser is installed; if not, install it
-        check_cmd = ["npx", "playwright", "launch-server", f"--browser={PW_BROWSER}", "--help"]
-        subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    except Exception:
-        install_cmd = ["npx", "-y", "playwright@latest", "install", "--with-deps", PW_BROWSER]
-        try:
-            subprocess.run(install_cmd, check=True)
-            logging.info(f"Installed Playwright browser: {PW_BROWSER}")
-        except Exception as e:
-            logging.error(f"Failed to auto-install Playwright browser {PW_BROWSER}: {e}")
+    # # Ensure the requested Playwright browser is installed
+    # try:
+    #     # Check if the Playwright browser is installed; if not, install it
+    #     check_cmd = ["npx", "playwright", "launch-server", f"--browser={PW_BROWSER}", "--help"]
+    #     subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    # except Exception:
+    #     install_cmd = ["npx", "-y", "playwright@latest", "install", "--with-deps", PW_BROWSER]
+    #     try:
+    #         subprocess.run(install_cmd, check=True)
+    #         logging.info(f"Installed Playwright browser: {PW_BROWSER}")
+    #     except Exception as e:
+    #         logging.error(f"Failed to auto-install Playwright browser {PW_BROWSER}: {e}")
 
-    pw_params = MCPServerStdioParams(
-        command="npx",
-        args=pw_args,
-        env={"PATH": os.getenv("PATH", "")},
-    )
-    servers.append(MCPServerStdio(
-        name="playwright",
-        params=pw_params,
-        cache_tools_list=True,
-        client_session_timeout_seconds=120,
-    ))
+    # pw_params = MCPServerStdioParams(
+    #     command="npx",
+    #     args=pw_args,
+    #     env={"PATH": os.getenv("PATH", "")},
+    # )
+    # servers.append(MCPServerStdio(
+    #     name="playwright",
+    #     params=pw_params,
+    #     cache_tools_list=True,
+    #     client_session_timeout_seconds=120,
+    # ))
 
     # B) Framer MCP (SSE) — env or fallback URL
     framer_url = os.getenv("FRAMER_MCP_SSE_URL")
@@ -336,8 +336,6 @@ You are a realtime meeting assistant.
 Prefer tools when available:
 - Use `current_time` for time questions.
 - Use `weather_now` for current weather.
-- Use Playwright MCP tools for browsing (e.g., `browser_navigate`, `browser_wait_for_selector`,
-  `browser_take_screenshot`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_install`).
 - Use Canva MCP tools for UI/component/design actions if present.
 - Use n8n MCP tools for workflows if present.
 

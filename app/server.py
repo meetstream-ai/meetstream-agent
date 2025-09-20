@@ -7,7 +7,6 @@ import struct
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-# === FastAPI ===
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +33,7 @@ logger = logging.getLogger("bridge")
 
 IGNORED_SPEAKERS = {
     "Nav's test Meeting Agent",
+    "Meetstream Agent",
     # add more display names here if needed
 }
 
