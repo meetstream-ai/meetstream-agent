@@ -7,9 +7,11 @@ import struct
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from typing_extensions import assert_never
 from starlette.websockets import WebSocketState
 
@@ -17,9 +19,20 @@ from starlette.websockets import WebSocketState
 # Uses the exact imports you showed in server.py
 from agents.realtime import RealtimeRunner, RealtimeSession, RealtimeSessionEvent
 try:
-    from .agent import get_starting_agent  # when used as a package
+    from .agent_modules import get_realtime_agent  # when used as a package
 except Exception:
-    from agent import get_starting_agent     # when run directly
+    from agent_modules import get_realtime_agent     # when run directly
+
+# Backward compatibility - alias for old import path
+def get_starting_agent():
+    """Backward compatibility wrapper for old agent import."""
+    return get_realtime_agent()
+
+# Import non-realtime agent
+try:
+    from .agent_modules import get_non_realtime_agent_async, NonRealtimeAgentConfig, get_mcp_connection_status
+except Exception:
+    from agent_modules import get_non_realtime_agent_async, NonRealtimeAgentConfig, get_mcp_connection_status
 
 import os, numpy as np
 try:
@@ -63,19 +76,8 @@ def _resample_pcm16(pcm_bytes: bytes, src_hz: int, dst_hz: int) -> bytes:
     y = np.clip(y, -32768, 32767).astype(np.int16)
     return y.tobytes()
 
-async def _preconnect_mcp(agent):
-    """Connect all MCP servers on the agent before starting the session."""
-    mcp_servers = getattr(agent, "mcp_servers", None) or []
-    for srv in mcp_servers:
-        # Most SDK wrappers expose connect()/disconnect() and an is_connected flag
-        try:
-            if hasattr(srv, "connect"):
-                # optional: check flag to avoid double-connects
-                is_connected = getattr(srv, "is_connected", False)
-                if not is_connected:
-                    await srv.connect()
-        except Exception as e:
-            logger.error(f"MCP connect failed for {getattr(srv,'name','<unnamed>')}: {e}")
+# MCP preconnect removed - realtime agents don't use MCPs
+# Non-realtime agents handle MCP connections internally via Langchain
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Manager that pairs:
@@ -114,11 +116,8 @@ class BridgeManager:
         async with self._lock_for(bot_id):
             if bot_id in self.sessions:
                 return
-            agent = get_starting_agent()
-            try:
-                await _preconnect_mcp(agent)
-            except Exception as e:
-                logger.error(f"Preconnect MCP failed: {e}")
+            # Get realtime agent (no MCPs)
+            agent = get_realtime_agent()
             runner = RealtimeRunner(agent)
             ctx = await runner.run()
             session = await ctx.__aenter__()
@@ -399,6 +398,53 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Add CORS middleware for API endpoints
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Non-realtime agent manager
+class NonRealtimeAgentManager:
+    def __init__(self):
+        self.agents: Dict[str, Any] = {}  # session_id -> agent_executor
+        self._session_counter = 0
+    
+    async def get_agent(self, session_id: str):
+        """Get or create a non-realtime agent for a session."""
+        if session_id not in self.agents:
+            try:
+                config = NonRealtimeAgentConfig(
+                    name="Meetstream Non-Realtime Agent",
+                    model="gpt-4o",
+                    temperature=0.7,
+                )
+                agent = await get_non_realtime_agent_async(config)
+                self.agents[session_id] = agent
+                logger.info(f"✅ Created non-realtime agent for session: {session_id} with model: {config.model}")
+            except Exception as e:
+                logger.error(f"❌ Failed to create non-realtime agent: {e}", exc_info=True)
+                raise
+        return self.agents[session_id]
+    
+    def remove_agent(self, session_id: str):
+        """Remove agent for a session."""
+        self.agents.pop(session_id, None)
+
+non_realtime_manager = NonRealtimeAgentManager()
+
+# Request/Response models for chat API
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    session_id: str
+
 # ----- 1) Optional UI socket (unchanged protocol) --------------------------------
 @app.websocket("/ws/{session_id}")
 async def ui_socket(websocket: WebSocket, session_id: str):
@@ -552,9 +598,78 @@ async def meetstream_audio_bind(websocket: WebSocket):
 # ----- Static UI (optional) ------------------------------------------------------
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
+# ----- 4) Non-realtime chat API endpoint ----------------------------------------
+@app.post("/api/chat")
+async def chat_endpoint(request: ChatRequest):
+    """Handle text-based chat with non-realtime agent (uses MCPs)."""
+    try:
+        session_id = request.session_id or f"chat_{non_realtime_manager._session_counter}"
+        if not request.session_id:
+            non_realtime_manager._session_counter += 1
+        
+        # Get or create agent for this session
+        agent = await non_realtime_manager.get_agent(session_id)
+        
+        logger.info(f"Processing chat message for session: {session_id}")
+        
+        # Invoke agent with the message
+        result = await agent.ainvoke({"input": request.message})
+        
+        # Extract response
+        response_text = result.get("output", "") if isinstance(result, dict) else str(result)
+        
+        from agent_modules.mcp_setup import get_mcp_servers_config
+        mcp_configs = get_mcp_servers_config()
+        mcp_count = len(mcp_configs)
+        connections = get_mcp_connection_status()
+        
+        logger.info(
+            f"✅ Chat response generated for session: {session_id}, configured MCPs: {mcp_count}, "
+            f"active connections: {connections.get('connected_servers', 0)}"
+        )
+        
+        return JSONResponse({
+            "response": response_text,
+            "session_id": session_id,
+            "mcp_servers_configured": mcp_count,
+            "mcp_connections": connections,
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Chat endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+
+
+@app.get("/api/mcp-status")
+async def mcp_status():
+    """Check MCP connection status."""
+    try:
+        from agent_modules.mcp_setup import get_mcp_servers_config
+        mcp_configs = get_mcp_servers_config()
+        connections = get_mcp_connection_status()
+        
+        status = {
+            "configured_servers": len(mcp_configs),
+            "configured_details": mcp_configs,
+            "connections": connections,
+        }
+        if connections.get("connected_servers", 0) == 0 and len(mcp_configs) > 0:
+            status["note"] = "Configured MCP servers detected, connect via /chat to establish sessions."
+        
+        return JSONResponse(status)
+    except Exception as e:
+        logger.error(f"MCP status error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/")
 async def index():
     return FileResponse("static/index.html")
+
+
+@app.get("/chat")
+async def chat_page():
+    return FileResponse("static/chat.html")
 
 # ----- Entrypoint ----------------------------------------------------------------
 if __name__ == "__main__":

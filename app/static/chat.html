@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Realtime Demo</title>
+    <title>Meetstream Chat (MCP)</title>
     <style>
         * {
             margin: 0;
@@ -345,13 +345,8 @@
             color: #0066cc;
         }
     </style>
-    <!-- Optional overrides for WebSocket base/path when running behind proxies or on VMs.
-         Example:
-         <meta name="ws-base" content="wss://agent.meetstream.ai">
-         <meta name="ws-path" content="/bridge">
-    -->
 </head>
-<body data-mode="realtime">
+<body data-mode="nonrealtime">
     <div id="insecureWarning" style="display:none; background:#fff3cd; color:#664d03; border:1px solid #ffecb5; padding:10px 14px; font-size:0.9rem;">
         ⚠️ Microphone capture requires a secure context (HTTPS) or localhost. 
         <a id="tryHttpsLink" href="#" style="margin-left:8px; color:#0d6efd; text-decoration:underline;">Try HTTPS</a>
@@ -360,27 +355,25 @@
         <h1>Meetstream Agent</h1>
         <div class="header-actions">
             <div class="mode-switch">
-                <a id="modeRealtimeBtn" class="mode-btn active" href="/">🎙️ Realtime</a>
-                <a id="modeNonRealtimeBtn" class="mode-btn" href="/chat">💬 Chat (MCPs)</a>
+                <a id="modeRealtimeBtn" class="mode-btn" href="/">🎙️ Realtime</a>
+                <a id="modeNonRealtimeBtn" class="mode-btn active" href="/chat">💬 Chat (MCPs)</a>
             </div>
-            <button id="connectBtn" class="connect-btn disconnected">Connect</button>
+            <button id="connectBtn" class="connect-btn disconnected" style="display:none;">Connect</button>
         </div>
     </div>
     
     <div class="main">
         <div class="messages-pane">
             <div class="messages-header">
-                Conversation
+                Chat with MCP Tools
             </div>
-            <div id="messagesContent" class="messages-content">
-                <!-- Messages will appear here -->
-            </div>
+            <div id="messagesContent" class="messages-content"></div>
             <div class="controls" id="realtimeControls">
                 <button id="muteBtn" class="mute-btn unmuted" disabled>🎤 Mic On</button>
-                <span id="status" class="status disconnected">Disconnected</span>
+                <span id="status" class="status connected">Chat Mode</span>
             </div>
             <div class="chat-input-container" id="chatInputContainer">
-                <input type="text" id="chatInput" class="chat-input" placeholder="Type your message here... (uses MCPs)" />
+                <input type="text" id="chatInput" class="chat-input" placeholder="Type your message here..." />
                 <button id="sendBtn" class="send-btn">Send</button>
             </div>
         </div>
@@ -390,18 +383,14 @@
                 <div class="events-header">
                     Event stream
                 </div>
-                <div id="eventsContent" class="events-content">
-                    <!-- Events will appear here -->
-                </div>
+                <div id="eventsContent" class="events-content"></div>
             </div>
             
             <div class="tools-pane">
                 <div class="tools-header">
                     Tools & Handoffs
                 </div>
-                <div id="toolsContent" class="tools-content">
-                    <!-- Tools and handoffs will appear here -->
-                </div>
+                <div id="toolsContent" class="tools-content"></div>
             </div>
         </div>
     </div>
@@ -409,3 +398,4 @@
     <script src="app.js"></script>
 </body>
 </html>
+

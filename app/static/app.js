@@ -15,8 +15,13 @@ class RealtimeDemo {
         this.playbackAudioContext = null;
         this.currentAudioSource = null;
         
+        // Mode inferred from body data attribute
+        this.currentMode = document.body.dataset.mode || 'realtime';
+        this.chatSessionId = this.generateSessionId();
+        
         this.initializeElements();
         this.setupEventListeners();
+        this.applyModeUI();
         // Show HTTPS/localhost warning if needed
         this.showInsecureBannerIfNeeded();
     }
@@ -28,20 +33,169 @@ class RealtimeDemo {
         this.messagesContent = document.getElementById('messagesContent');
         this.eventsContent = document.getElementById('eventsContent');
         this.toolsContent = document.getElementById('toolsContent');
+        
+        // Mode toggle buttons
+        this.modeRealtimeBtn = document.getElementById('modeRealtimeBtn');
+        this.modeNonRealtimeBtn = document.getElementById('modeNonRealtimeBtn');
+        
+        // Chat input elements
+        this.chatInputContainer = document.getElementById('chatInputContainer');
+        this.chatInput = document.getElementById('chatInput');
+        this.sendBtn = document.getElementById('sendBtn');
+        this.realtimeControls = document.getElementById('realtimeControls');
     }
     
     setupEventListeners() {
-        this.connectBtn.addEventListener('click', () => {
-            if (this.isConnected) {
-                this.disconnect();
-            } else {
-                this.connect();
-            }
-        });
+        if (this.connectBtn) {
+            this.connectBtn.addEventListener('click', () => {
+                if (this.currentMode === 'realtime') {
+                    if (this.isConnected) {
+                        this.disconnect();
+                    } else {
+                        this.connect();
+                    }
+                } else {
+                    this.addMessage('assistant', 'Chat mode is ready! Type your message below. 💬');
+                }
+            });
+        }
         
-        this.muteBtn.addEventListener('click', () => {
-            this.toggleMute();
-        });
+        if (this.muteBtn) {
+            this.muteBtn.addEventListener('click', () => {
+                this.toggleMute();
+            });
+        }
+        
+        // Chat input
+        if (this.sendBtn) {
+            this.sendBtn.addEventListener('click', () => {
+                this.sendChatMessage();
+            });
+        }
+        
+        if (this.chatInput) {
+            this.chatInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.sendChatMessage();
+                }
+            });
+        }
+    }
+    
+    switchMode(mode) {
+        console.log(`Switching mode from ${this.currentMode} to ${mode}`);
+        if (this.currentMode === mode) {
+            console.log('Already in this mode, skipping');
+            return;
+        }
+        
+        // Disconnect realtime if switching away
+        if (this.currentMode === 'realtime' && this.isConnected) {
+            console.log('Disconnecting realtime before switching');
+            this.disconnect();
+        }
+        
+        this.currentMode = mode;
+        console.log(`Mode switched to: ${this.currentMode}`);
+        
+        this.applyModeUI();
+        console.log('Mode switch complete');
+    }
+    
+    applyModeUI() {
+        const mode = this.currentMode;
+        document.body.dataset.mode = mode;
+        
+        // Update UI
+        if (mode === 'realtime') {
+            console.log('Updating UI for realtime mode');
+            if (this.modeRealtimeBtn) this.modeRealtimeBtn.classList.add('active');
+            if (this.modeNonRealtimeBtn) this.modeNonRealtimeBtn.classList.remove('active');
+            if (this.realtimeControls) this.realtimeControls.style.display = 'flex';
+            if (this.chatInputContainer) this.chatInputContainer.style.display = 'none';
+            if (this.connectBtn) {
+                this.connectBtn.textContent = 'Connect';
+                this.connectBtn.className = 'connect-btn disconnected';
+                this.connectBtn.style.display = 'inline-flex';
+            }
+        } else {
+            console.log('Updating UI for non-realtime mode');
+            if (this.modeRealtimeBtn) this.modeRealtimeBtn.classList.remove('active');
+            if (this.modeNonRealtimeBtn) this.modeNonRealtimeBtn.classList.add('active');
+            if (this.realtimeControls) this.realtimeControls.style.display = 'flex';
+            if (this.chatInputContainer) this.chatInputContainer.style.display = 'flex';
+            if (this.connectBtn) {
+                this.connectBtn.textContent = 'Ready';
+                this.connectBtn.className = 'connect-btn disconnected';
+                this.connectBtn.style.display = 'none';
+            }
+            if (this.status) {
+                this.status.textContent = 'Chat Mode';
+                this.status.className = 'status connected';
+            }
+        }
+        
+        // Clear messages when switching modes
+        if (this.messagesContent) this.messagesContent.innerHTML = '';
+        if (this.eventsContent) this.eventsContent.innerHTML = '';
+        if (this.toolsContent) this.toolsContent.innerHTML = '';
+        
+        console.log(`Mode UI applied for ${mode}`);
+        
+        if (mode === 'nonrealtime') {
+            this.addMessage('assistant', '💬 Chat + MCP mode is ready. Type your request below and I will use MCP tools when needed.');
+        }
+    }
+    
+    async sendChatMessage() {
+        if (!this.chatInput || !this.sendBtn) {
+            console.warn('Chat input elements missing; cannot send chat message.');
+            return;
+        }
+        if (this.currentMode !== 'nonrealtime') {
+            this.addMessage('assistant', 'Switch to Chat mode (or open /chat) to send MCP requests.');
+            return;
+        }
+        const message = this.chatInput.value.trim();
+        if (!message) return;
+        
+        // Add user message to UI
+        this.addMessage('user', message);
+        this.chatInput.value = '';
+        this.sendBtn.disabled = true;
+        
+        // Show typing indicator
+        const typingMsg = this.addMessage('assistant', 'Thinking...');
+        
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: message,
+                    session_id: this.chatSessionId
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // Remove typing indicator and add response
+            typingMsg.remove();
+            this.addMessage('assistant', data.response);
+            
+        } catch (error) {
+            console.error('Chat error:', error);
+            typingMsg.remove();
+            this.addMessage('assistant', `Error: ${error.message}. Please check the server logs.`);
+        } finally {
+            this.sendBtn.disabled = false;
+        }
     }
     
     generateSessionId() {
@@ -89,18 +243,22 @@ class RealtimeDemo {
     }
     
     updateConnectionUI() {
+        if (!this.connectBtn || !this.status) {
+            return;
+        }
+        
         if (this.isConnected) {
             this.connectBtn.textContent = 'Disconnect';
             this.connectBtn.className = 'connect-btn connected';
             this.status.textContent = 'Connected';
             this.status.className = 'status connected';
-            this.muteBtn.disabled = false;
+            if (this.muteBtn) this.muteBtn.disabled = false;
         } else {
             this.connectBtn.textContent = 'Connect';
             this.connectBtn.className = 'connect-btn disconnected';
             this.status.textContent = 'Disconnected';
             this.status.className = 'status disconnected';
-            this.muteBtn.disabled = true;
+            if (this.muteBtn) this.muteBtn.disabled = true;
         }
     }
     
@@ -502,5 +660,11 @@ class RealtimeDemo {
 
 // Initialize the demo when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    new RealtimeDemo();
+    console.log('Initializing RealtimeDemo...');
+    try {
+        const demo = new RealtimeDemo();
+        console.log('RealtimeDemo initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize RealtimeDemo:', error);
+    }
 });
