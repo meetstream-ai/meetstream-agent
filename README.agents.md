@@ -1,27 +1,33 @@
-# Meetstream Agent Operations Guide
+# MeetStream bridge: agent & MCP operations
 
-This README expands on the base setup instructions and focuses on four day‑to‑day workflows:
+**Quick MCP registration (Canva, `mcp.config.json`, verification):** see [docs/mcp.md](docs/mcp.md).
+
+This document supplements the main [README.md](README.md) with day‑to‑day workflows:
 
 1. Adding and managing MCP (Model Context Protocol) servers
 2. Running the realtime bridge locally
 3. Updating the agent’s tools, instructions, or topology
 4. Swapping the realtime model provider (OpenAI ⇄ Gemini ⇄ Anthropic)
 
-All paths below are relative to `meetstream-agent/`.
+Architecture reference: [Bridge Server Architecture & Session Management](https://docs.meetstream.ai/guides/get-started/bridge-server-architecture).
+
+All paths below are relative to the repository root.
 
 ---
 
 ## 1. Stack Overview
 
-- `app/agent.py` – defines the primary `RealtimeAgent`, local function tools (`current_time`, `weather_now`), and MCP wiring via `build_mcp_servers*`.
-- `app/server.py` – FastAPI bridge that handles Meetstream audio/control sockets, instantiates a `RealtimeRunner`, and funnels audio/text to the agent.
+- `app/agent.py` – primary `RealtimeAgent`, local tools (`current_time`, `weather_now`), and MCP wiring via `build_mcp_servers*`.
+- `app/server.py` – FastAPI app wiring; mounts routes and static files.
+- `app/meetstream/` – MeetStream protocol (audio frames, outbound commands, WebSocket receive loops for `/bridge` and `/bridge/audio`).
+- `app/realtime/pipeline.py` – `RealtimeMeetingBridge`: `RealtimeRunner`, ingest, event pump to MeetStream.
 - `app/static/` – Optional browser UI for debugging sessions via WebSocket.
-- `pyproject.toml` + `uv.lock` – dependency definition, pinned via **uv**.
+- `pyproject.toml` + `uv.lock` – dependencies, pinned with **uv**.
 
 ```
-Meetstream (audio/text) → FastAPI bridge (`server.py`) → `RealtimeRunner`
-                   ↑                                     ↓
-                MCP outputs ← `agent.py` tools & MCP servers
+MeetStream (audio/text) → app/meetstream → app/realtime/pipeline (RealtimeRunner)
+                                ↑                        ↓
+                         MCP / tools ← app/agent.py
 ```
 
 ---
@@ -39,31 +45,31 @@ Meetstream (audio/text) → FastAPI bridge (`server.py`) → `RealtimeRunner`
   - `FRAMER_MCP_SSE_URL`
   - `N8N_MCP_SSE_URL` / `N8N_MCP_REMOTE_URL`
   - `N8N_MCP_AUTH` (or fallback `AUTH_TOKEN`)
-  - `MCP_CONFIG` (path to a JSON config – defaults to `mcp.config.json`)
+  - `MCP_CONFIG` (path to a JSON config – defaults to **`mcp.config.json`**, which ships with **Canva**; requires Node/`npx`)
+  - `DOCKER_MCP_ENABLED`, `DOCKER_MCP_URL`, `DOCKER_MCP_BEARER_TOKEN` — optional **streamable HTTP** MCP (e.g. Docker behind ngrok); merged after the JSON file (see [docs/mcp.md](docs/mcp.md))
 
-Keep any secrets in `.env` (ignored by git) and load them via `direnv`, `dotenv`, or your process manager.
+Keep secrets in `.env` at the repo root (see `.env.example`). The bridge loads it on startup.
 
 ---
 
 ## 3. Running the Bridge Locally
 
 ```bash
-cd /Users/njawahar/Documents/Documents\ -\ Nav’s\ MacBook\ Air/Meetstream/meetstream-agents/meetstream-agent
+cd /path/to/meetstream-agent
 uv python install            # once per machine, ensures the pinned interpreter
 uv sync                      # installs dependencies into .venv
 
-# Export env vars (API keys, MCP endpoints, etc.)
-export OPENAI_API_KEY=sk-...
-export FRAMER_MCP_SSE_URL=https://...
+cp .env.example .env
+# Set OPENAI_API_KEY and any optional MCP env vars
 
-# Run FastAPI + WebSocket bridge
 uv run uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Verifications:
-- `http://localhost:8000/` serves the static UI in `app/static/index.html`.
-- `ws://localhost:8000/bridge` accepts Meetstream control traffic after sending `{"type":"ready","bot_id":"demo"}`.
-- Logs such as `MCP servers to connect: ['framer', 'n8n', 'canva']` confirm pre-connection succeeded.
+- `http://localhost:8000/` serves the static UI in `app/static/index.html` (when present).
+- `http://localhost:8000/health` returns JSON.
+- `ws://localhost:8000/bridge` accepts MeetStream control traffic after `{"type":"ready","bot_id":"demo"}`.
+- `ws://localhost:8000/bridge/audio` sends `{"type":"ready","bot_id":"demo"}` then binary or `PCMChunk` frames.
 
 ### Hot reload & development tips
 - Use `uv run ipython` for quick REPL access with project dependencies.
@@ -74,11 +80,13 @@ Verifications:
 
 ## 4. Adding New MCP Servers
 
+For a focused walkthrough (Canva env flag, JSON example, naming), read [docs/mcp.md](docs/mcp.md) first.
+
 There are two supported paths: declarative JSON configs or imperative Python wiring.
 
 ### 4.1 JSON-driven (preferred for deployments)
 
-1. Create `mcp.config.json` next to `server.py`:
+1. Create `mcp.config.json` in the project root (next to `pyproject.toml`):
 
 ```json
 {
@@ -120,7 +128,7 @@ export MCP_CONFIG=/path/to/mcp.config.json
 
 ### 4.2 Code-driven/default wiring
 
-If no config file is found, `build_mcp_servers_default()` bootstraps Framer (SSE), n8n (via `mcp-remote`), and Canva (stdio). Extend this list if you want the defaults baked into the repo:
+If **`mcp.config.json`** is missing or has an empty `mcpServers`, `build_mcp_servers_default()` only adds servers when the corresponding env vars are set (Framer SSE, n8n via `mcp-remote`). **Canva** is configured in the shipped `mcp.config.json`, not via env. Extend `build_mcp_servers_default()` if you want different env-only defaults baked into the repo:
 
 ```python
 # app/agent.py
@@ -137,7 +145,7 @@ Recommended pattern:
 
 ### 4.3 Pre-connecting MCPs
 
-Both `app/agent.py` (`mcp_connect_once_if_needed`) and `app/server.py` (`_preconnect_mcp`) ensure every MCP is online before Meetstream traffic flows. If you add long-lived MCPs, call `await mcp_connect_once_if_needed()` during server startup to fail fast on bad credentials.
+Both `app/agent.py` (`mcp_connect_once_if_needed`) and `app/realtime/mcp.py` (`preconnect_mcp_servers`, invoked from `RealtimeMeetingBridge.ensure_session`) connect MCPs before traffic flows. If you add long-lived MCPs, call `await mcp_connect_once_if_needed()` during server startup to fail fast on bad credentials.
 
 ---
 
@@ -202,7 +210,7 @@ Out of the box, `RealtimeRunner` instantiates `OpenAIRealtimeWebSocketModel()` (
 
 1. Create a provider adapter that subclasses `agents.realtime.model.RealtimeModel` or wraps the default one.
 2. Handle authentication, WebSocket URL negotiation, and translation between provider events and the toolkit’s `RealtimeModelEvent`s.
-3. Update `BridgeManager.ensure_session()` to inject the model:
+3. Update `RealtimeMeetingBridge.ensure_session()` in `app/realtime/pipeline.py` to inject the model:
 
 ```python
 from app.providers.gemini import GeminiRealtimeModel
@@ -249,7 +257,7 @@ ANTHROPIC_API_KEY=...
 REALTIME_PROVIDER=openai   # or gemini, anthropic
 ```
 
-In `BridgeManager.ensure_session` you can branch on `REALTIME_PROVIDER` to choose the adapter:
+In `RealtimeMeetingBridge.ensure_session` you can branch on `REALTIME_PROVIDER` to choose the adapter:
 
 ```python
 provider = os.getenv("REALTIME_PROVIDER", "openai")
@@ -267,7 +275,7 @@ runner = RealtimeRunner(agent, model=model)
 ## 7. Testing & Validation
 
 - **Connection smoke test:** run `uv run python - <<'PY'` script that imports `agent.mcp_connect_all()` to ensure MCP endpoints are reachable before deploying.
-- **Audio loopback:** send a short PCM clip through `/bridge/audio` using `websocat` to confirm resampling logic.
+- **Audio loopback:** send a short PCM clip through `/bridge/audio` (handshake JSON `ready`, then binary or `PCMChunk`) using `websocat` to confirm resampling logic.
 - **Tool health:** call `await agent.tools[i]()` inside an `ipython` session or trigger them via Meetstream UI to validate descriptions and outputs.
 - **Provider swap dry run:** instantiate `RealtimeRunner(agent, model=YourModel())`, call `asyncio.run(runner.run().__aenter__())`, and send a single text turn to verify authentication without spinning up the FastAPI stack.
 
@@ -278,7 +286,8 @@ Document any team-specific MCP credentials or provider quirks adjacent to this R
 ## 8. Quick Reference
 
 - Run server: `uv run uvicorn app.server:app --reload`
-- Connect Meetstream control socket: send `{"type":"ready","bot_id":"demo"}` over `/bridge`
+- MeetStream control: `wss://<host>/bridge` with `{"type":"ready","bot_id":"<id>"}`
+- MeetStream audio: `wss://<host>/bridge/audio` with the same `bot_id` in the `ready` message
 - Config-driven MCPs: `mcp.config.json` + `MCP_CONFIG` env
 - Agent tweaks: edit `app/agent.py` (`AGENT_INSTRUCTIONS`, `tools`, `handoffs`)
 - Provider swap: set `REALTIME_PROVIDER` + supply adapter implementing `agents.realtime.model.RealtimeModel`

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "canva": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+      "env": {
+        "PATH": "$PATH"
+      },
+      "timeout": 120
+    }
+  }
+}

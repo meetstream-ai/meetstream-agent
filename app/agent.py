@@ -4,7 +4,13 @@ from __future__ import annotations
 import os
 import json
 import logging
-import subprocess
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
 from typing import Optional, List
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -22,13 +28,21 @@ from agents.realtime import RealtimeAgent
 # MCP classes (compat across SDK versions)
 try:
     from agents.mcp import (
-        MCPServerStdio, MCPServerSse,
-        MCPServerStdioParams, MCPServerSseParams,
+        MCPServerStdio,
+        MCPServerSse,
+        MCPServerStreamableHttp,
+        MCPServerStdioParams,
+        MCPServerSseParams,
+        MCPServerStreamableHttpParams,
     )
 except Exception:
     from agents.mcp.server import (  # type: ignore
-        MCPServerStdio, MCPServerSse,
-        MCPServerStdioParams, MCPServerSseParams,
+        MCPServerStdio,
+        MCPServerSse,
+        MCPServerStreamableHttp,
+        MCPServerStdioParams,
+        MCPServerSseParams,
+        MCPServerStreamableHttpParams,
     )
 # Optional HTTP client for weather
 try:
@@ -123,12 +137,16 @@ def build_mcp_servers_from_config(path: str) -> List[object]:
                     cache_tools_list=True,
                 ))
             elif t in ("stream", "streamable_http", "http"):
-                servers.append(MCPServerStreamableHttp(
-                    name=name,
-                    url=_expand_env(spec.get("url", "")),
-                    headers=spec.get("headers"),
-                    cache_tools_list=True,
-                ))
+                servers.append(
+                    MCPServerStreamableHttp(
+                        params=MCPServerStreamableHttpParams(
+                            url=_expand_env(spec.get("url", "")),
+                            headers=spec.get("headers"),
+                        ),
+                        cache_tools_list=True,
+                        name=name,
+                    )
+                )
             else:
                 logging.warning(f"Unknown MCP server type for '{name}': {t}")
         except Exception as e:
@@ -220,16 +238,17 @@ def build_mcp_servers_default() -> List[object]:
     if framer_url:
         fr_params = MCPServerSseParams(
             url=framer_url,
-            headers=None,
-            request_timeout_seconds=30.0,
-            sse_timeout_seconds=30.0,
+            timeout=30.0,
+            sse_read_timeout=30.0,
         )
-        servers.append(MCPServerSse(
-            name="framer",
-            params=fr_params,
-            cache_tools_list=True,
-            client_session_timeout_seconds=90,
-        ))
+        servers.append(
+            MCPServerSse(
+                params=fr_params,
+                cache_tools_list=True,
+                name="framer",
+                client_session_timeout_seconds=90,
+            )
+        )
 
 
     # C) n8n MCP (remote via stdio) — no auth by default
@@ -256,34 +275,64 @@ def build_mcp_servers_default() -> List[object]:
             client_session_timeout_seconds=120,
         ))
 
-    # D) Canva MCP (remote via stdio)
-    canva_url = "https://mcp.canva.com/mcp"
-    canva_args = ["-y", "mcp-remote@latest", canva_url]
-
-    canva_stdio = MCPServerStdioParams(
-        command="npx",
-        args=canva_args,
-        env={"PATH": os.getenv("PATH", "")},
-    )
-    servers.append(MCPServerStdio(
-        name="canva",
-        params=canva_stdio,
-        cache_tools_list=True,
-        client_session_timeout_seconds=120,
-    ))
+    # Canva is registered via `mcp.config.json` by default (see repo root).
 
     return servers
 
 
+def _build_docker_mcp_from_env() -> List[object]:
+    """
+    Optional streamable HTTP MCP (e.g. Docker-hosted MCP behind ngrok).
+
+    Set DOCKER_MCP_ENABLED=1 and provide DOCKER_MCP_URL + DOCKER_MCP_BEARER_TOKEN in .env.
+    Merged after ``mcp.config.json`` / defaults so Canva + Docker can run together.
+    """
+    if os.getenv("DOCKER_MCP_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return []
+    url = os.getenv("DOCKER_MCP_URL", "").strip()
+    token = os.getenv("DOCKER_MCP_BEARER_TOKEN", "").strip()
+    if not url or not token:
+        logging.warning(
+            "DOCKER_MCP_ENABLED is set but DOCKER_MCP_URL or DOCKER_MCP_BEARER_TOKEN is missing; skipping Docker MCP"
+        )
+        return []
+    timeout = float(os.getenv("DOCKER_MCP_SESSION_TIMEOUT", "120"))
+    return [
+        MCPServerStreamableHttp(
+            params=MCPServerStreamableHttpParams(
+                url=url,
+                headers={"Authorization": f"Bearer {token}"},
+            ),
+            cache_tools_list=True,
+            name="docker",
+            client_session_timeout_seconds=timeout,
+        )
+    ]
+
+
 def build_mcp_servers() -> List[object]:
-    """Prefer external JSON config; otherwise use defaults (Playwright + Framer)."""
+    """Load ``mcp.config.json`` (or defaults), then append optional Docker MCP from env."""
     cfg_path = os.getenv("MCP_CONFIG", "mcp.config.json")
     servers = build_mcp_servers_from_config(cfg_path)
     if servers:
-        logging.info(f"Loaded MCP servers from {cfg_path}: {[getattr(s, 'name', '<unnamed>') for s in servers]}")
-        return servers
-    servers = build_mcp_servers_default()
-    logging.info(f"Using default MCP servers: {[getattr(s, 'name', '<unnamed>') for s in servers]}")
+        logging.info(
+            "Loaded MCP servers from %s: %s",
+            cfg_path,
+            [getattr(s, "name", "<unnamed>") for s in servers],
+        )
+    else:
+        servers = build_mcp_servers_default()
+        logging.info(
+            "Using default MCP servers: %s",
+            [getattr(s, "name", "<unnamed>") for s in servers],
+        )
+    extra = _build_docker_mcp_from_env()
+    if extra:
+        servers = list(servers) + extra
+        logging.info(
+            "Added Docker streamable MCP from env: %s",
+            [getattr(s, "name", "<unnamed>") for s in extra],
+        )
     return servers
 
 
@@ -330,21 +379,43 @@ async def mcp_connect_once_if_needed():
 
 # ─────────────────────────────── Realtime Agent ───────────────────────────────
 
-AGENT_INSTRUCTIONS = """
-You are a realtime meeting assistant.
 
-Prefer tools when available:
-- Use `current_time` for time questions.
-- Use `weather_now` for current weather.
-- Use Canva MCP tools for UI/component/design actions if present.
-- Use n8n MCP tools for workflows if present.
+def _build_agent_instructions() -> str:
+    """
+    Only mention MCPs that are actually configured (see ``build_mcp_servers``).
+    Naming tools that are not registered causes the model to call missing tools (e.g. ``canva_*``).
+    """
+    lines = [
+        "You are a realtime meeting assistant.",
+        "",
+        "Prefer tools when available:",
+        "- Use `current_time` for time questions.",
+        "- Use `weather_now` for current weather.",
+    ]
+    names = {getattr(s, "name", "").lower() for s in MCP_REGISTRY.servers}
+    if "canva" in names:
+        lines.append("- Use Canva MCP tools for design only when appropriate.")
+    if "n8n" in names:
+        lines.append("- Use n8n MCP tools for workflows when appropriate.")
+    if "framer" in names:
+        lines.append("- Use Framer MCP tools when present for design/site tasks.")
+    if "docker" in names:
+        lines.append("- Use Docker MCP (streamable HTTP) tools when present.")
+    lines.extend(
+        [
+            "",
+            "Only use tools that appear in your available tool list; do not invent tool names.",
+            "Keep spoken responses concise and avoid repeating prior text verbatim.",
+        ]
+    )
+    return "\n".join(lines)
 
-Keep spoken responses concise and avoid repeating prior text verbatim.
-"""
+
+AGENT_INSTRUCTIONS = _build_agent_instructions()
 
 assistant_agent = RealtimeAgent(
     name="Meetstream Realtime Agent",
-    handoff_description="Single agent with local tools and Playwright/Framer MCPs.",
+    handoff_description="Meeting assistant with local tools and optional MCP servers.",
     instructions=AGENT_INSTRUCTIONS,
     tools=[current_time, weather_now],
     mcp_servers=MCP_REGISTRY.servers,
