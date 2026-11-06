@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -21,14 +21,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger("bridge.meetstream.ws")
 
 
-async def control_channel_loop(ws: WebSocket, pipeline: RealtimeMeetingBridge) -> None:
-    """JSON control socket: ``ready`` handshake, then ``usermsg`` / ``interrupt``."""
+#: Policy violation: the socket's session token does not allow this bot.
+CLOSE_POLICY_VIOLATION = 1008
+
+
+async def control_channel_loop(
+    ws: WebSocket, pipeline: RealtimeMeetingBridge, allow_bot: Callable[[str], bool] | None = None
+) -> None:
+    """
+    JSON control socket: ``ready`` handshake, then ``usermsg`` / ``interrupt``.
+
+    ``allow_bot`` decides whether the ``bot_id`` in ``ready`` may use this
+    socket (see app.meetstream.session_token).
+    """
     await ws.accept()
     bot_id: str | None = None
     try:
         init = json.loads(await ws.receive_text())
         if init.get("type") != "ready" or not init.get("bot_id"):
             await ws.close(code=1003)
+            return
+        if allow_bot is not None and not allow_bot(str(init["bot_id"])):
+            await ws.close(code=CLOSE_POLICY_VIOLATION)
             return
         bot_id = init["bot_id"]
 
@@ -54,8 +68,10 @@ async def control_channel_loop(ws: WebSocket, pipeline: RealtimeMeetingBridge) -
             await pipeline.unbind_control(bot_id)
 
 
-async def audio_ingest_loop(ws: WebSocket, pipeline: RealtimeMeetingBridge) -> None:
-    """Binary or legacy JSON PCM from MeetStream → model."""
+async def audio_ingest_loop(
+    ws: WebSocket, pipeline: RealtimeMeetingBridge, allow_bot: Callable[[str], bool] | None = None
+) -> None:
+    """Binary or legacy JSON PCM from MeetStream → model. ``allow_bot`` as for the control socket."""
     await ws.accept()
     bot_id: str | None = None
     try:
@@ -66,6 +82,9 @@ async def audio_ingest_loop(ws: WebSocket, pipeline: RealtimeMeetingBridge) -> N
                 data = json.loads(raw["text"])
 
                 if data.get("type") == "ready":
+                    if allow_bot is not None and data.get("bot_id") and not allow_bot(str(data["bot_id"])):
+                        await ws.close(code=CLOSE_POLICY_VIOLATION)
+                        return
                     bot_id = data.get("bot_id")
                     if not bot_id:
                         await ws.close(code=1003)
