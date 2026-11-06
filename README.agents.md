@@ -60,16 +60,17 @@ uv python install            # once per machine, ensures the pinned interpreter
 uv sync                      # installs dependencies into .venv
 
 cp .env.example .env
-# Set OPENAI_API_KEY and any optional MCP env vars
+# Set OPENAI_API_KEY, BRIDGE_SECRET and any optional MCP env vars
 
 uv run uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Verifications:
-- `http://localhost:8000/` serves the static UI in `app/static/index.html` (when present).
+- `http://localhost:8000/` serves the static UI in `app/static/index.html` when `DEBUG_UI_ENABLED=1`.
 - `http://localhost:8000/health` returns JSON.
-- `ws://localhost:8000/bridge` accepts MeetStream control traffic after `{"type":"ready","bot_id":"demo"}`.
-- `ws://localhost:8000/bridge/audio` sends `{"type":"ready","bot_id":"demo"}` then binary or `PCMChunk` frames.
+- `ws://localhost:8000/bridge/<token>` accepts MeetStream control traffic after `{"type":"ready","bot_id":"demo"}`. Make `<token>` with `uv run python -m app.meetstream.session_token`.
+- `ws://localhost:8000/bridge/audio/<token>` sends `{"type":"ready","bot_id":"demo"}` then binary or `PCMChunk` frames.
+- Tests: `uv run --with pytest pytest`.
 
 ### Hot reload & development tips
 - Use `uv run ipython` for quick REPL access with project dependencies.
@@ -275,7 +276,7 @@ runner = RealtimeRunner(agent, model=model)
 ## 7. Testing & Validation
 
 - **Connection smoke test:** run `uv run python - <<'PY'` script that imports `agent.mcp_connect_all()` to ensure MCP endpoints are reachable before deploying.
-- **Audio loopback:** send a short PCM clip through `/bridge/audio` (handshake JSON `ready`, then binary or `PCMChunk`) using `websocat` to confirm resampling logic.
+- **Audio loopback:** send a short PCM clip through `/bridge/audio/<token>` (handshake JSON `ready`, then binary or `PCMChunk`) using `websocat` to confirm resampling logic.
 - **Tool health:** call `await agent.tools[i]()` inside an `ipython` session or trigger them via Meetstream UI to validate descriptions and outputs.
 - **Provider swap dry run:** instantiate `RealtimeRunner(agent, model=YourModel())`, call `asyncio.run(runner.run().__aenter__())`, and send a single text turn to verify authentication without spinning up the FastAPI stack.
 
@@ -286,8 +287,9 @@ Document any team-specific MCP credentials or provider quirks adjacent to this R
 ## 8. Quick Reference
 
 - Run server: `uv run uvicorn app.server:app --reload`
-- MeetStream control: `wss://<host>/bridge` with `{"type":"ready","bot_id":"<id>"}`
-- MeetStream audio: `wss://<host>/bridge/audio` with the same `bot_id` in the `ready` message
+- Session token per bot: `uv run python -m app.meetstream.session_token` (needs `BRIDGE_SECRET`)
+- MeetStream control: `wss://<host>/bridge/<token>` with `{"type":"ready","bot_id":"<id>"}`
+- MeetStream audio: `wss://<host>/bridge/audio/<token>` with the same `bot_id` in the `ready` message
 - Config-driven MCPs: `mcp.config.json` + `MCP_CONFIG` env
 - Agent tweaks: edit `app/agent.py` (`AGENT_INSTRUCTIONS`, `tools`, `handoffs`)
 - Provider swap: set `REALTIME_PROVIDER` + supply adapter implementing `agents.realtime.model.RealtimeModel`
