@@ -44,9 +44,11 @@ async def control_channel_loop(
         if allow_bot is not None and not allow_bot(str(init["bot_id"])):
             await ws.close(code=CLOSE_POLICY_VIOLATION)
             return
+        if not await pipeline.bind_control(init["bot_id"], ws):
+            await ws.close(code=CLOSE_POLICY_VIOLATION)
+            return
         bot_id = init["bot_id"]
 
-        await pipeline.bind_control(bot_id, ws)
         await ack_control_channel(ws, bot_id)
 
         while True:
@@ -65,7 +67,7 @@ async def control_channel_loop(
         logger.error("[%s] Control endpoint error: %s", bot_id, e)
     finally:
         if bot_id:
-            await pipeline.unbind_control(bot_id)
+            await pipeline.unbind_control(bot_id, ws)
 
 
 async def audio_ingest_loop(
@@ -85,11 +87,13 @@ async def audio_ingest_loop(
                     if allow_bot is not None and data.get("bot_id") and not allow_bot(str(data["bot_id"])):
                         await ws.close(code=CLOSE_POLICY_VIOLATION)
                         return
-                    bot_id = data.get("bot_id")
-                    if not bot_id:
+                    if not data.get("bot_id"):
                         await ws.close(code=1003)
                         return
-                    await pipeline.bind_audio_channel(bot_id, ws)
+                    if not await pipeline.bind_audio_channel(data["bot_id"], ws):
+                        await ws.close(code=CLOSE_POLICY_VIOLATION)
+                        return
+                    bot_id = data["bot_id"]
                     await ack_audio_channel(ws, bot_id)
                     continue
 
@@ -118,4 +122,4 @@ async def audio_ingest_loop(
         logger.error("[%s] Audio endpoint error: %s", bot_id, e)
     finally:
         if bot_id:
-            await pipeline.unbind_audio_channel(bot_id)
+            await pipeline.unbind_audio_channel(bot_id, ws)

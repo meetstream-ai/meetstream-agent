@@ -157,21 +157,55 @@ class RealtimeMeetingBridge:
         if bot_id not in self.audio_ws and bot_id not in self.control_ws:
             await self.close_session(bot_id)
 
-    async def bind_control(self, bot_id: str, ws: WebSocket) -> None:
-        self.control_ws[bot_id] = ws
+    @staticmethod
+    def _is_open(ws: WebSocket) -> bool:
+        return (
+            ws.client_state == WebSocketState.CONNECTED
+            and ws.application_state == WebSocketState.CONNECTED
+        )
+
+    def _claim(self, registry: Dict[str, WebSocket], bot_id: str, ws: WebSocket, channel: str) -> bool:
+        """
+        Registers ``ws`` as the bot's ``channel`` socket unless another one is
+        still open: a second socket with the same session token must not take
+        over a live session (the agent's output would go to it). A socket that
+        died without closing is dropped by uvicorn's WebSocket ping (about 40 s
+        by default), after which a reconnect is accepted.
+        """
+        current = registry.get(bot_id)
+        if current is not None and current is not ws and self._is_open(current):
+            logger.warning("[%s] Refused a second %s socket: one is already connected.", bot_id, channel)
+            return False
+        registry[bot_id] = ws
+        return True
+
+    async def bind_control(self, bot_id: str, ws: WebSocket) -> bool:
+        """False (and nothing registered) when the bot already has an open control socket."""
+        if not self._claim(self.control_ws, bot_id, ws, "control"):
+            return False
         await self.ensure_session(bot_id)
         logger.info("[control connected] bot=%s", bot_id)
+        return True
 
-    async def unbind_control(self, bot_id: str) -> None:
+    async def unbind_control(self, bot_id: str, ws: Optional[WebSocket] = None) -> None:
+        """Forgets the control socket; with ``ws``, only if it is still the registered one."""
+        if ws is not None and self.control_ws.get(bot_id) is not ws:
+            return
         self.control_ws.pop(bot_id, None)
         logger.info("[control disconnected] bot=%s", bot_id)
         await self.maybe_cleanup(bot_id)
 
-    async def bind_audio_channel(self, bot_id: str, ws: WebSocket) -> None:
-        self.audio_ws[bot_id] = ws
+    async def bind_audio_channel(self, bot_id: str, ws: WebSocket) -> bool:
+        """False (and nothing registered) when the bot already has an open audio socket."""
+        if not self._claim(self.audio_ws, bot_id, ws, "audio"):
+            return False
         await self.ensure_session(bot_id)
+        return True
 
-    async def unbind_audio_channel(self, bot_id: str) -> None:
+    async def unbind_audio_channel(self, bot_id: str, ws: Optional[WebSocket] = None) -> None:
+        """Forgets the audio socket; with ``ws``, only if it is still the registered one."""
+        if ws is not None and self.audio_ws.get(bot_id) is not ws:
+            return
         self.audio_ws.pop(bot_id, None)
         await self.maybe_cleanup(bot_id)
 

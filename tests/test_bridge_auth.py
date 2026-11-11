@@ -15,39 +15,39 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.realtime.pipeline import RealtimeMeetingBridge
 from app.routes import websockets as ws_routes
 from app.server import app
 
 SECRET = "s" * 40
 
 
-class FakeBridge:
-    """Records what reached the agent; no OpenAI session."""
+class FakeBridge(RealtimeMeetingBridge):
+    """The real socket registry, with no OpenAI session behind it."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.texts: list[tuple[str, str]] = []
         self.controls: list[str] = []
         self.ui: list[str] = []
+        self.closed: list[str] = []
 
     async def bind_control(self, bot_id, ws):
-        self.controls.append(bot_id)
+        bound = await super().bind_control(bot_id, ws)
+        if bound:
+            self.controls.append(bot_id)
+        return bound
 
-    async def unbind_control(self, bot_id):
+    async def ensure_session(self, bot_id):
         pass
 
-    async def bind_audio_channel(self, bot_id, ws):
-        pass
-
-    async def unbind_audio_channel(self, bot_id):
-        pass
+    async def close_session(self, bot_id):
+        self.closed.append(bot_id)
 
     async def ingest_user_text(self, bot_id, text):
         self.texts.append((bot_id, text))
 
     async def interrupt_model(self, bot_id):
-        pass
-
-    async def ensure_session(self, bot_id):
         pass
 
     async def attach_ui(self, session_id, ws, bot_id=None):
@@ -210,3 +210,37 @@ def test_tokens_are_redacted_from_uvicorn_logs(caplog):
     message = caplog.records[-1].getMessage()
     assert token not in message
     assert "/bot-1/bridge/audio/<token>" in message
+
+
+def test_a_second_socket_cannot_take_over_a_live_session(fake_bridge):
+    """Same token, same bot, while the real bot is connected: refused on both channels."""
+    client = TestClient(app)
+    token = _token()
+    with client.websocket_connect(f"/bridge/{token}") as control,             client.websocket_connect(f"/bridge/audio/{token}") as audio:
+        control.send_json({"type": "ready", "bot_id": "bot-1"})
+        control.receive_json()
+        audio.send_json({"type": "ready", "bot_id": "bot-1"})
+        audio.receive_json()
+        registered = fake_bridge.control_ws["bot-1"]
+
+        assert _close_code(client, f"/bridge/{token}", "bot-1") == 1008
+        assert _close_code(client, f"/bot-1/bridge/audio/{token}", "bot-1") == 1008
+        # The refused sockets left the real ones in place and the session up.
+        assert fake_bridge.control_ws["bot-1"] is registered
+        assert "bot-1" in fake_bridge.audio_ws
+        assert fake_bridge.closed == []
+
+        control.send_json({"command": "usermsg", "message": "still mine"})
+    assert fake_bridge.texts == [("bot-1", "still mine")]
+    assert fake_bridge.controls == ["bot-1"]
+
+
+def test_the_bot_can_reconnect_after_its_socket_closes(fake_bridge):
+    client = TestClient(app)
+    token = _token()
+    for _ in range(2):
+        with client.websocket_connect(f"/bridge/{token}") as ws:
+            ws.send_json({"type": "ready", "bot_id": "bot-1"})
+            assert ws.receive_json()["command"] == "ack"
+    assert fake_bridge.controls == ["bot-1", "bot-1"]
+    assert fake_bridge.control_ws == {}
