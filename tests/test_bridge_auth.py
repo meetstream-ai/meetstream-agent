@@ -138,3 +138,75 @@ def test_forged_expired_or_unsigned_tokens_are_refused(fake_bridge, monkeypatch)
     monkeypatch.setenv("BRIDGE_SECRET", "short")
     assert _refused(client, f"/bridge/{good}")
     assert fake_bridge.controls == []
+
+
+def _close_code(client: TestClient, path: str, bot_id: str) -> int | None:
+    """The close code the server sent, or None if the socket stayed open."""
+    try:
+        with client.websocket_connect(path) as ws:
+            ws.send_json({"type": "ready", "bot_id": bot_id})
+            ws.receive_json()
+    except WebSocketDisconnect as closed:
+        return closed.code
+    return None
+
+
+def test_refusals_use_policy_violation(fake_bridge):
+    client = TestClient(app)
+    assert _close_code(client, "/bridge/garbage", "bot-1") == 1008
+    assert _close_code(client, "/bridge", "bot-1") == 1008
+    assert _close_code(client, "/ws/x", "bot-1") == 1008
+
+
+def test_a_path_bot_mismatch_does_not_bind_the_token(fake_bridge):
+    # Refused because the path names another bot: the token must stay free
+    # for the bot it was made for.
+    client = TestClient(app)
+    token = _token()
+    assert _close_code(client, f"/bot-1/bridge/{token}", "bot-2") == 1008
+    with client.websocket_connect(f"/bot-2/bridge/{token}") as ws:
+        ws.send_json({"type": "ready", "bot_id": "bot-2"})
+        assert ws.receive_json()["command"] == "ack"
+    assert fake_bridge.controls == ["bot-2"]
+
+
+def test_the_audio_channel_is_held_to_the_bot_bound_on_control(fake_bridge):
+    client = TestClient(app)
+    token = _token()
+    with client.websocket_connect(f"/bridge/{token}") as ws:
+        ws.send_json({"type": "ready", "bot_id": "bot-1"})
+        ws.receive_json()
+    assert _close_code(client, f"/bridge/audio/{token}", "bot-2") == 1008
+
+
+def test_verify_rejects_tampered_tokens():
+    from app.meetstream.session_token import verify
+
+    good = _token()
+    expires, nonce, sig = good.split(".")
+    assert verify(good, SECRET)
+    for bad in [
+        f"{expires}.{nonce[:-1]}{'1' if nonce[-1] == '0' else '0'}.{sig}",  # nonce changed
+        f"{expires}.{nonce}.{sig}.x",  # extra part
+        f"{expires}.{nonce}.{sig[:-1]}é",  # non-ASCII signature
+        "",
+    ]:
+        assert not verify(bad, SECRET)
+    assert not verify(good, "t" * 40)  # another secret
+
+
+def test_tokens_are_redacted_from_uvicorn_logs(caplog):
+    """uvicorn logs every WebSocket path; the token in it must not reach the log."""
+    import logging
+
+    from app.server import create_app
+
+    create_app()  # installs the filter
+    token = _token()
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        logging.getLogger("uvicorn.error").info(
+            '%s - "WebSocket %s" [accepted]', "1.2.3.4:5", f"/bot-1/bridge/audio/{token}"
+        )
+    message = caplog.records[-1].getMessage()
+    assert token not in message
+    assert "/bot-1/bridge/audio/<token>" in message
