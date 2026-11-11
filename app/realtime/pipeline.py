@@ -216,10 +216,13 @@ class RealtimeMeetingBridge:
         except Exception as e:
             await self._on_ingest_send_failure(bot_id, e)
 
-    async def ingest_meeting_audio_pcm(self, bot_id: str, pcm_bytes: bytes) -> None:
+    async def ingest_meeting_audio_pcm(
+        self, bot_id: str, pcm_bytes: bytes, sample_rate: Optional[int] = None
+    ) -> None:
+        """PCM16 mono from the meeting; ``sample_rate`` from the frame, else ``MEETSTREAM_IN_RATE``."""
         if not pcm_bytes:
             return
-        pcm_model = resample_pcm16(pcm_bytes, self._audio.incoming_hz, self._audio.model_hz)
+        pcm_model = resample_pcm16(pcm_bytes, sample_rate or self._audio.incoming_hz, self._audio.model_hz)
         await self.ensure_session(bot_id)
         try:
             await self.sessions[bot_id].send_audio(pcm_model)

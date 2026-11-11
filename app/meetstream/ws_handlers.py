@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app.meetstream.audio import decode_audio_frame, should_ignore_speaker
+from app.meetstream.audio import decode_audio_frame_with_rate, should_ignore_speaker
 from app.meetstream.outbound import ack_audio_channel, ack_control_channel
 
 if TYPE_CHECKING:
@@ -84,14 +84,14 @@ async def audio_ingest_loop(ws: WebSocket, pipeline: RealtimeMeetingBridge) -> N
                 continue
 
             if "bytes" in raw and raw["bytes"] and bot_id:
-                result = decode_audio_frame(raw["bytes"])
+                result = decode_audio_frame_with_rate(raw["bytes"])
                 if result is None:
                     continue
-                _sid, speaker_name, pcm_bytes = result
+                _sid, speaker_name, pcm_bytes, sample_rate = result
                 if should_ignore_speaker(speaker_name):
                     continue
                 if pcm_bytes:
-                    await pipeline.ingest_meeting_audio_pcm(bot_id, pcm_bytes)
+                    await pipeline.ingest_meeting_audio_pcm(bot_id, pcm_bytes, sample_rate)
 
     except WebSocketDisconnect:
         pass

@@ -16,18 +16,58 @@ except Exception:
     _HAS_SCIPY = False
 
 
-def decode_audio_frame(data: bytes) -> Optional[Tuple[str, str, bytes]]:
-    """Decode MeetStream binary audio frame → (speaker_id, speaker_name, pcm_bytes)."""
-    if len(data) < 5 or data[0] != 0x01:
+#: Byte 0 of a binary frame on the audio socket.
+FRAME_PCM = 0x01
+#: Sent by MeetStream live (seen November 2026) but not yet in its docs: like
+#: ``0x01``, with the PCM format after the type byte (sample rate uint32 LE,
+#: channels uint8). Observed: 24000 Hz, mono, 40 ms per frame.
+FRAME_PCM_WITH_FORMAT = 0x04
+
+
+def decode_audio_frame_with_rate(data: bytes) -> Optional[Tuple[str, str, bytes, Optional[int]]]:
+    """
+    Decode a MeetStream binary audio frame → (speaker_id, speaker_name, pcm_bytes, sample_rate).
+
+    ``sample_rate`` is None for ``0x01`` frames (their rate is ``MEETSTREAM_IN_RATE``).
+    Unknown types, multi-channel audio and truncated frames give None, so the
+    caller skips them instead of failing the socket.
+    """
+    if len(data) < 5:
         return None
-    sid_len = int.from_bytes(data[1:3], "little")
-    speaker_id = data[3 : 3 + sid_len].decode("utf-8")
-    off = 3 + sid_len
+    sample_rate: Optional[int] = None
+    if data[0] == FRAME_PCM:
+        off = 1
+    elif data[0] == FRAME_PCM_WITH_FORMAT:
+        if len(data) < 10:
+            return None
+        sample_rate = int.from_bytes(data[1:5], "little")
+        if data[5] != 1 or sample_rate <= 0:
+            return None
+        off = 6
+    else:
+        return None
+    sid_len = int.from_bytes(data[off : off + 2], "little")
+    off += 2
+    if off + sid_len + 2 > len(data):
+        return None
+    speaker_id = data[off : off + sid_len].decode("utf-8", errors="replace")
+    off += sid_len
     sname_len = int.from_bytes(data[off : off + 2], "little")
     off += 2
-    speaker_name = data[off : off + sname_len].decode("utf-8")
+    if off + sname_len > len(data):
+        return None
+    speaker_name = data[off : off + sname_len].decode("utf-8", errors="replace")
     off += sname_len
-    return speaker_id, speaker_name, data[off:]
+    pcm = data[off:]
+    return speaker_id, speaker_name, pcm[: len(pcm) - len(pcm) % 2], sample_rate
+
+
+def decode_audio_frame(data: bytes) -> Optional[Tuple[str, str, bytes]]:
+    """Decode a ``0x01`` frame → (speaker_id, speaker_name, pcm_bytes). See ``decode_audio_frame_with_rate``."""
+    result = decode_audio_frame_with_rate(data)
+    if result is None or result[3] is not None:
+        return None
+    return result[:3]
 
 
 def resample_pcm16(pcm_bytes: bytes, src_hz: int, dst_hz: int) -> bytes:
