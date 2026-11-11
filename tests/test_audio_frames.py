@@ -91,11 +91,22 @@ class FakeBridge(RealtimeMeetingBridge):
         self.sessions.pop(bot_id, None)
 
 
-def _model_bytes_for(path: str, frames: list[bytes], monkeypatch) -> list[int]:
+def _audio_path(monkeypatch) -> str:
+    """``/bridge/audio``, or its token form where the bridge needs session tokens (MS-2135)."""
+    try:
+        from app.meetstream import session_token
+    except ImportError:
+        return "/bridge/audio"
+    secret = "s" * 40
+    monkeypatch.setenv("BRIDGE_SECRET", secret)
+    return f"/bridge/audio/{session_token.mint(secret)}"
+
+
+def _model_bytes_for(frames: list[bytes], monkeypatch) -> list[int]:
     fake = FakeBridge()
     monkeypatch.setattr(ws_routes, "bridge", fake)
     client = TestClient(app)
-    with client.websocket_connect(path) as ws:
+    with client.websocket_connect(_audio_path(monkeypatch)) as ws:
         ws.send_json({"type": "ready", "bot_id": "bot-1"})
         ws.receive_json()
         for f in frames:
@@ -109,11 +120,11 @@ def test_type_4_audio_reaches_the_model_at_the_right_rate(monkeypatch):
     """40 ms at 24 kHz is 1920 bytes at the model's 24 kHz: no rate change."""
     model_rate = RealtimeMeetingBridge()._audio.model_hz
     expected = int(960 * model_rate / 24000) * 2
-    assert _model_bytes_for("/bridge/audio", [frame_v4(PCM_40MS_24K)] * 3, monkeypatch) == [expected] * 3
+    assert _model_bytes_for([frame_v4(PCM_40MS_24K)] * 3, monkeypatch) == [expected] * 3
 
 
 def test_type_1_audio_still_uses_the_configured_rate(monkeypatch):
     bridge = RealtimeMeetingBridge()
     in_hz, model_hz = bridge._audio.incoming_hz, bridge._audio.model_hz
     pcm = b"\x01\x00" * (in_hz // 25)  # 40 ms at MEETSTREAM_IN_RATE
-    assert _model_bytes_for("/bridge/audio", [frame_v1(pcm)], monkeypatch) == [model_hz // 25 * 2]
+    assert _model_bytes_for([frame_v1(pcm)], monkeypatch) == [model_hz // 25 * 2]
