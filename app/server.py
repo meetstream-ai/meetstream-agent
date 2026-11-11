@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.meetstream.session_token import install_log_redaction
 from app.routes import pages, websockets
 
 
@@ -34,6 +35,8 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # uvicorn logs WebSocket paths, which carry the bridge session tokens.
+    install_log_redaction()
     application = FastAPI(title="MeetStream Bridge", lifespan=lifespan)
     application.include_router(pages.router)
     application.include_router(websockets.router)

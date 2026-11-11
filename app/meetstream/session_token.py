@@ -29,6 +29,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -86,6 +87,36 @@ class TokenBindings:
 
 
 bindings = TokenBindings()
+
+
+#: A session token anywhere in a log line (the nonce may be any hex length
+#: when tokens are made outside this module).
+_TOKEN_IN_TEXT = re.compile(r"\b\d+\.[0-9A-Fa-f]+\.[0-9a-f]{64}\b")
+
+
+class RedactTokens(logging.Filter):
+    """
+    Replaces session tokens in log records with ``<token>``.
+
+    uvicorn logs the full path of every WebSocket (``"WebSocket /bridge/<token>"
+    [accepted]``), so without this each token would sit in the server log,
+    usable by whoever reads it until it expires.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _TOKEN_IN_TEXT.sub("<token>", message)
+        if redacted != message:
+            record.msg, record.args = redacted, ()
+        return True
+
+
+def install_log_redaction() -> None:
+    """Adds ``RedactTokens`` to the uvicorn loggers that print request paths."""
+    for name in ("uvicorn.error", "uvicorn.access"):
+        target = logging.getLogger(name)
+        if not any(isinstance(f, RedactTokens) for f in target.filters):
+            target.addFilter(RedactTokens())
 
 
 def main() -> None:
