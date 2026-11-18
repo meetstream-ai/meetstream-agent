@@ -121,7 +121,7 @@ When you create a MeetStream session (HTTP API), point both WebSockets at your d
 
 ```json
 {
-  "meeting_url": "https://meet.google.com/your-meeting-id",
+  "meeting_link": "https://meet.google.com/your-meeting-id",
   "bot_name": "My Assistant",
   "live_audio_required": {
     "websocket_url": "wss://your-host.example.com/bridge/audio"
