@@ -25,5 +25,5 @@ async def index():
     return {
         "status": "ok",
         "service": "meetstream-bridge",
-        "docs": "https://docs.meetstream.ai/guides/get-started/bridge-server-architecture",
+        "docs": "https://docs.meetstream.ai/guides/websockets/bridge-server-architecture",
     }

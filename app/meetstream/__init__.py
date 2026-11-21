@@ -1,7 +1,7 @@
 """
 MeetStream wire protocol: binary audio frames, speaker filtering, outbound commands.
 
-See: https://docs.meetstream.ai/guides/get-started/bridge-server-architecture
+See: https://docs.meetstream.ai/guides/websockets/bridge-server-architecture
 """
 
 from .audio import decode_audio_frame, resample_pcm16, should_ignore_speaker
