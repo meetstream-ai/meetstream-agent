@@ -1,8 +1,22 @@
 # MeetStream Bridge
 
-Open-source **FastAPI** bridge between [MeetStream](https://meetstream.ai) and **OpenAI Realtime** via the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) (`openai-agents[voice]`). It implements the two WebSocket endpoints and session lifecycle described in the official guide: [Bridge Server Architecture & Session Management](https://docs.meetstream.ai/guides/get-started/bridge-server-architecture).
+Open-source **FastAPI** bridge between [MeetStream](https://meetstream.ai) and **OpenAI Realtime** via the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) (`openai-agents[voice]`). It implements the two WebSocket endpoints and session lifecycle described in the official guide: [Bridge Server Architecture & Session Management](https://docs.meetstream.ai/guides/websockets/bridge-server-architecture).
 
 Use this repo as a starting point: run the server on a public URL (or tunnel), point MeetStream at your `/bridge` and `/bridge/audio` URLs, and supply your own **OpenAI** and **MeetStream** credentials where each service expects them.
+
+## Where this fits
+
+MeetStream has three ways to integrate ([Integration paths](https://docs.meetstream.ai/guides/introduction/integration-paths)):
+
+1. **Recording only (Bot API).** A bot records the meeting; you get recordings, transcripts, participants, chat and webhooks after the call, or live data during it. You do not need this repo for that.
+2. **Agents in meetings, your own stack.** The recommended first choice for an agent in the meeting.
+   - **2a. Bridge server: this repo.** The bot opens two WebSockets to your server: live audio in (`live_audio_required.websocket_url`, for example `wss://host/bridge/audio`) and the control socket (`socket_connection_url.websocket_url`, for example `wss://host/bridge`) to send audio, chat, images and interrupts back. You run the speech-to-text, LLM and voice. MeetStream charges the bot price only ($0.35 per recording hour, $0.25 at volume): no agent infrastructure and no model tokens. Your model provider bills you for what this bridge uses (OpenAI Realtime by default).
+   - **2b. Your own agent as the brain.** Claude Code, Codex, Hermes, OpenClaw and others answer through `model.provider: "local_agent"` with the [MeetStream Agent Kit](https://github.com/meetstream-ai/agent-kit). Bot price + $0.25 per hour agent infrastructure. Meeting speech reaches an agent that has access to your computer and terminal (prompt injection): use the lowest access level, and keep your computer, the agent and the bridge on for the whole call. Guide: [MIA screen sharing and custom agents](https://docs.meetstream.ai/guides/features/mia-screen-sharing-and-custom-agents).
+3. **Managed agent infrastructure (Agents API, MIA).** MeetStream hosts the agent, with MeetStream's inbuilt keys (OpenAI and Deepgram today) or your own provider keys. Bot price + $0.25 per hour agent infrastructure + the models you pick. See [Voice agent pricing and keys](https://docs.meetstream.ai/guides/mia/pricing-and-keys). A MIA bot takes only `agent_config_id`: do not point a MIA bot at this bridge. Flows 2a and 3 are separate bots.
+
+### Use local models
+
+This repo ships one model stack: OpenAI Realtime through the OpenAI Agents SDK. It has no local model adapters. To run local models (for example Parakeet for speech-to-text, a local LLM and a local TTS), replace the model session in `app/realtime/pipeline.py` (`RealtimeMeetingBridge`) with your own pipeline, and keep the MeetStream side in `app/meetstream/` (frame decoding, resampling, outbound `sendaudio`, `sendmsg` and `interrupt`) as it is. Set `MODEL_AUDIO_RATE` to the sample rate your models expect. The bot price does not change.
 
 ## Start here
 
@@ -61,7 +75,7 @@ You rarely edit `server.py` unless you add middleware or new HTTP routes.
 - **Comfortable with FastAPI:** `app/routes/` → `app/meetstream/` → `app/realtime/pipeline.py`.  
 - **MCP setup (Canva, JSON config):** [docs/mcp.md](docs/mcp.md) → then [README.agents.md](README.agents.md) for advanced agent/provider topics.
 
-The layout is intentional: **MeetStream wire format** lives under `app/meetstream/`, **OpenAI Realtime + pump** under `app/realtime/`, **persona and tools** in `app/agent.py`. That matches the official docs split ([audio streaming](https://docs.meetstream.ai/guides/get-started/real-time-audio-streaming) vs [control commands](https://docs.meetstream.ai/guides/get-started/meeting-control-and-command-patterns)) plus a single orchestrator in `pipeline.py`.
+The layout is intentional: **MeetStream wire format** lives under `app/meetstream/`, **OpenAI Realtime + pump** under `app/realtime/`, **persona and tools** in `app/agent.py`. That matches the official docs split ([audio streaming](https://docs.meetstream.ai/guides/websockets/real-time-audio-streaming) vs [control commands](https://docs.meetstream.ai/guides/websockets/meeting-control-patterns)) plus a single orchestrator in `pipeline.py`.
 
 ## What this server does
 
@@ -121,7 +135,7 @@ When you create a MeetStream session (HTTP API), point both WebSockets at your d
 
 ```json
 {
-  "meeting_url": "https://meet.google.com/your-meeting-id",
+  "meeting_link": "https://meet.google.com/your-meeting-id",
   "bot_name": "My Assistant",
   "live_audio_required": {
     "websocket_url": "wss://your-host.example.com/bridge/audio"
@@ -182,7 +196,7 @@ Use this when your MCP runs in **Docker** (or elsewhere) and is reachable at an 
 
 ## Protocol notes (aligned with MeetStream docs)
 
-- **Audio in:** Binary frames per [Live Audio Capture & Frame Decoding](https://docs.meetstream.ai/guides/get-started/real-time-audio-streaming), or legacy JSON `PCMChunk` with base64 audio.
+- **Audio in:** Binary frames per [Live Audio Capture & Frame Decoding](https://docs.meetstream.ai/guides/websockets/real-time-audio-streaming), or legacy JSON `PCMChunk` with base64 audio.
 - **Control in:** After `{"type":"ready","bot_id":"..."}`, MeetStream may send `usermsg` and `interrupt`.
 - **Control out:** The bridge sends `command: "ack"` after binding, `sendaudio` for PCM back to the meeting, `sendmsg` for chat (includes both `message` and `msg`), and `interrupt` with `action: "clear_audio_queue"` when the model stops audio or **starts a tool** (so queued TTS does not overlap the next utterance after the tool). Outbound model audio is **batched** (default ~240 ms at the model sample rate, then resampled to 48 kHz) so MeetStream gets fewer, larger chunks than raw Realtime deltas—tune with **`MEETSTREAM_OUT_AUDIO_CHUNK_MS`** (40–2000) if playback glitches or latency feels off. Optional **`MEETSTREAM_SENDAUDIO_PACE_MS`** adds a short pause between consecutive `sendaudio` frames if the client struggles with burst traffic.
 

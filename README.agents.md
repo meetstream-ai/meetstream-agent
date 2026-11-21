@@ -9,7 +9,7 @@ This document supplements the main [README.md](README.md) with day‑to‑day wo
 3. Updating the agent’s tools, instructions, or topology
 4. Swapping the realtime model provider (OpenAI ⇄ Gemini ⇄ Anthropic)
 
-Architecture reference: [Bridge Server Architecture & Session Management](https://docs.meetstream.ai/guides/get-started/bridge-server-architecture).
+Architecture reference: [Bridge Server Architecture & Session Management](https://docs.meetstream.ai/guides/websockets/bridge-server-architecture).
 
 All paths below are relative to the repository root.
 
