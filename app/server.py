@@ -1,7 +1,7 @@
 """
 FastAPI application: wires HTTP/WebSocket routes and static assets.
 
-Architecture: https://docs.meetstream.ai/guides/get-started/bridge-server-architecture
+Architecture: https://docs.meetstream.ai/guides/websockets/bridge-server-architecture
 
 Layout
 ------
