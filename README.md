@@ -33,7 +33,7 @@ The bridge must have a public `wss://` URL even when the models run on your lapt
 | Step | Action |
 |------|--------|
 | 1 | `uv sync` |
-| 2 | Copy `.env.example` → `.env` and set `OPENAI_API_KEY` |
+| 2 | Copy `.env.example` → `.env` and set `OPENAI_API_KEY` and `BRIDGE_SECRET` (see below) |
 | 3 | Start the server |
 
 ```bash
@@ -41,6 +41,14 @@ uv run uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
 
 Check [http://localhost:8000/health](http://localhost:8000/health).
+
+`BRIDGE_SECRET` signs the session tokens that MeetStream must present (step 2). Make one with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Keep it secret. The bridge refuses every MeetStream socket while `BRIDGE_SECRET` is unset or shorter than 32 characters.
 
 ### 2. Expose to MeetStream (tunnel)
 
@@ -50,21 +58,33 @@ The MeetStream API expects **public** `wss://` URLs, not `localhost`. With the b
 ngrok http 8000
 ```
 
-Use the HTTPS hostname ngrok prints, swap the scheme to `wss://`, and append the paths:
+A tunnel makes the bridge reachable by anyone who finds the URL, so each bot gets its own **session token** in its socket URLs. Make one token per bot, just before you create the bot:
+
+```bash
+uv run python -m app.meetstream.session_token          # valid 12 hours; --ttl-hours to change
+```
+
+Use the HTTPS hostname ngrok prints, swap the scheme to `wss://`, and append the paths with the token:
 
 | MeetStream field | Example URL |
 |------------------|-------------|
-| `socket_connection_url` → control | `wss://abc123.ngrok-free.app/bridge` |
-| `live_audio_required` → audio | `wss://abc123.ngrok-free.app/bridge/audio` |
+| `socket_connection_url` → control | `wss://abc123.ngrok-free.app/bridge/<token>` |
+| `live_audio_required` → audio | `wss://abc123.ngrok-free.app/bridge/audio/<token>` |
 
-Same host for both; only the path changes.
+Same host and token for both; only the path changes. The first `ready` message binds the token to its `bot_id`: the other channel and any reconnect must be for the same bot, and the token cannot be used for another bot. A token is checked when a socket opens: open sockets stay up past its expiry, but a reconnect after expiry is refused, so pick a lifetime longer than your longest meeting.
+
+Treat the socket URLs as secrets: until the token expires, whoever has the URL can connect as that bot whenever the bot itself is not connected. While a bot is connected, a second control or audio socket for it is refused (1008), so nobody can take over a live session; if a socket dies without closing, uvicorn's WebSocket ping drops it within about 40 seconds and a reconnect is accepted again. The server redacts tokens from its own logs (`/bridge/<token>`), but the ngrok inspector (`http://localhost:4040`) and anything else that records full URLs will show them. Keep `--ttl-hours` close to the meeting length.
+
+**Upgrading from the token-less URLs.** Bots created with `wss://<host>/bridge` and `wss://<host>/bridge/audio` are refused after this change (the server log says why). Set `BRIDGE_SECRET`, restart the server, then create new bots with a token in both URLs as above; there is no setting that turns the token off.
+
+To make tokens in your own backend (any language): `<expires_unix>.<nonce>.<sig>`, where `sig` is the hex HMAC-SHA256 of `"<expires_unix>.<nonce>"` with `BRIDGE_SECRET` as the key, and `nonce` is random hex. See `app/meetstream/session_token.py`.
 
 ### 3. Entry point in code
 
 | File | Role |
 |------|------|
 | `app/server.py` | Builds the FastAPI app, static files, `.env` load |
-| `app/routes/websockets.py` | Route map: `/bridge`, `/bridge/audio`, optional debug UI |
+| `app/routes/websockets.py` | Route map: `/bridge/<token>`, `/bridge/audio/<token>`, optional debug UI |
 
 You rarely edit `server.py` unless you add middleware or new HTTP routes.
 
@@ -90,9 +110,20 @@ The layout is intentional: **MeetStream wire format** lives under `app/meetstrea
 | Endpoint | Direction | Purpose |
 |----------|-----------|---------|
 | `GET /health` | — | Liveness check |
-| `GET /` | — | Optional demo UI (`app/static/`) |
-| `WebSocket /bridge` (or `/{bot_id}/bridge`) | MeetStream ↔ you | JSON control: handshake, `usermsg`, `interrupt`; outbound `sendaudio`, `sendmsg`, etc. |
-| `WebSocket /bridge/audio` (or `/{bot_id}/bridge/audio`) | MeetStream → you | Binary frames (current protocol) or legacy JSON `PCMChunk` |
+| `GET /` | — | Demo UI (`app/static/`) when `DEBUG_UI_ENABLED=1`; otherwise a JSON status |
+| `WebSocket /bridge/<token>` (or `/{bot_id}/bridge/<token>`) | MeetStream ↔ you | JSON control: handshake, `usermsg`, `interrupt`; outbound `sendaudio`, `sendmsg`, etc. |
+| `WebSocket /bridge/audio/<token>` (or `/{bot_id}/bridge/audio/<token>`) | MeetStream → you | Binary frames (current protocol) or legacy JSON `PCMChunk` |
+| `WebSocket /ws/{session_id}` | browser → you | Debug UI socket; only when `DEBUG_UI_ENABLED=1` |
+
+The old URLs without a token (`/bridge`, `/bridge/audio`) are refused, and the server log says what to change.
+
+### Debug UI (local only)
+
+`app/static/` has a browser page that sends your microphone to the agent. It can attach to the session of any `bot_id` and has no login, so it is off by default. Turn it on only on your own machine, never behind a tunnel:
+
+```bash
+DEBUG_UI_ENABLED=1 uv run uvicorn app.server:app --host 127.0.0.1 --port 8000
+```
 
 The bridge keeps **one OpenAI Realtime session per `bot_id`**. The session is created when the first channel connects and is torn down when **both** WebSockets have disconnected, matching the docs.
 
@@ -105,7 +136,8 @@ The bridge keeps **one OpenAI Realtime session per `bot_id`**. The session is cr
 | `app/meetstream/` | MeetStream wire format: binary audio decode, resampling, speaker filter, outbound JSON commands, `/bridge` receive loops |
 | `app/realtime/` | OpenAI Realtime session lifecycle, MCP preconnect, event serialization, model → MeetStream pump (`RealtimeMeetingBridge`) |
 | `app/agent.py` | `RealtimeAgent`, tools, MCP server list (LLM-facing only) |
-| `app/static/` | Optional browser UI for local debugging |
+| `app/meetstream/session_token.py` | Per-session tokens for the bridge sockets (make, check, bind to a bot) |
+| `app/static/` | Optional browser UI for local debugging (`DEBUG_UI_ENABLED=1`) |
 | `mcp.config.json` | MCP servers (default: Canva); expand with more `mcpServers` entries |
 | `docs/mcp.md` | Reference for `mcp.config.json` transports and examples |
 
@@ -123,7 +155,7 @@ git clone <this-repo>
 cd meetstream-agent
 
 cp .env.example .env
-# Edit .env: set OPENAI_API_KEY
+# Edit .env: set OPENAI_API_KEY and BRIDGE_SECRET
 
 uv sync
 uv run uvicorn app.server:app --host 0.0.0.0 --port 8000
@@ -146,23 +178,25 @@ When you create a MeetStream session (HTTP API), point both WebSockets at your d
   "meeting_link": "https://meet.google.com/your-meeting-id",
   "bot_name": "My Assistant",
   "live_audio_required": {
-    "websocket_url": "wss://your-host.example.com/bridge/audio"
+    "websocket_url": "wss://your-host.example.com/bridge/audio/<token>"
   },
   "socket_connection_url": {
-    "websocket_url": "wss://your-host.example.com/bridge"
+    "websocket_url": "wss://your-host.example.com/bridge/<token>"
   }
 }
 ```
 
-The same `bot_id` is sent on both channels in the `ready` handshake so this server can pair them.
+`<token>` is a new session token for this bot (`uv run python -m app.meetstream.session_token`). The same `bot_id` is sent on both channels in the `ready` handshake so this server can pair them, and the token is bound to that `bot_id`.
 
-If your MeetStream API uses URL templates with **`{bot_id}`** in the path, use the same host and paths **`wss://…/{bot_id}/bridge`** and **`wss://…/{bot_id}/bridge/audio`** — this app registers those routes as well as `/bridge` and `/bridge/audio`.
+If your MeetStream API uses URL templates with **`{bot_id}`** in the path, use the same host and paths **`wss://…/{bot_id}/bridge/<token>`** and **`wss://…/{bot_id}/bridge/audio/<token>`**. The bot in the path must be the bot in `ready`.
 
 ## Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | OpenAI API key for Realtime / Agents |
+| `BRIDGE_SECRET` | Yes | Signs the per-session tokens in the bridge socket URLs (at least 32 characters). Without it, every MeetStream socket is refused |
+| `DEBUG_UI_ENABLED` | No | `1` turns on the browser debug UI (`/` and `/ws/{session_id}`). Default off; local use only |
 | `PORT` | No | HTTP port (default `8000`) |
 | `MEETSTREAM_BOT_NAME` | No | Display name of your bot in the meeting; audio from this speaker is ignored (echo control) |
 | `MEETSTREAM_IGNORE_SPEAKERS` | No | Comma-separated display names to ignore |

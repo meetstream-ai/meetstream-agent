@@ -19,8 +19,10 @@ async def health() -> dict[str, str]:
 
 @router.get("/")
 async def index():
+    from app.routes.websockets import debug_ui_enabled
+
     index_path = STATIC_DIR / "index.html"
-    if index_path.is_file():
+    if debug_ui_enabled() and index_path.is_file():
         return FileResponse(index_path)
     return {
         "status": "ok",
