@@ -51,6 +51,10 @@ Use the HTTPS hostname ngrok prints, swap the scheme to `wss://`, and append the
 
 Same host and token for both; only the path changes. The first `ready` message binds the token to its `bot_id`: the other channel and any reconnect must be for the same bot, and the token cannot be used for another bot. A token is checked when a socket opens: open sockets stay up past its expiry, but a reconnect after expiry is refused, so pick a lifetime longer than your longest meeting.
 
+Treat the socket URLs as secrets: until the token expires, whoever has the URL can connect as that bot whenever the bot itself is not connected. While a bot is connected, a second control or audio socket for it is refused (1008), so nobody can take over a live session; if a socket dies without closing, uvicorn's WebSocket ping drops it within about 40 seconds and a reconnect is accepted again. The server redacts tokens from its own logs (`/bridge/<token>`), but the ngrok inspector (`http://localhost:4040`) and anything else that records full URLs will show them. Keep `--ttl-hours` close to the meeting length.
+
+**Upgrading from the token-less URLs.** Bots created with `wss://<host>/bridge` and `wss://<host>/bridge/audio` are refused after this change (the server log says why). Set `BRIDGE_SECRET`, restart the server, then create new bots with a token in both URLs as above; there is no setting that turns the token off.
+
 To make tokens in your own backend (any language): `<expires_unix>.<nonce>.<sig>`, where `sig` is the hex HMAC-SHA256 of `"<expires_unix>.<nonce>"` with `BRIDGE_SECRET` as the key, and `nonce` is random hex. See `app/meetstream/session_token.py`.
 
 ### 3. Entry point in code
