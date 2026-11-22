@@ -6,17 +6,25 @@ Use this repo as a starting point: run the server on a public URL (or tunnel), p
 
 ## Where this fits
 
-MeetStream has three ways to integrate ([Integration paths](https://docs.meetstream.ai/guides/introduction/integration-paths)):
+This repo is the starter for **track 2** of the MeetStream build tracks ([Integration paths](https://docs.meetstream.ai/guides/introduction/integration-paths)):
 
-1. **Recording only (Bot API).** A bot records the meeting; you get recordings, transcripts, participants, chat and webhooks after the call, or live data during it. You do not need this repo for that.
-2. **Agents in meetings, your own stack.** The recommended first choice for an agent in the meeting.
-   - **2a. Bridge server: this repo.** The bot opens two WebSockets to your server: live audio in (`live_audio_required.websocket_url`, for example `wss://host/bridge/audio`) and the control socket (`socket_connection_url.websocket_url`, for example `wss://host/bridge`) to send audio, chat, images and interrupts back. You run the speech-to-text, LLM and voice. MeetStream charges the bot price only ($0.35 per recording hour, $0.25 at volume): no agent infrastructure and no model tokens. Your model provider bills you for what this bridge uses (OpenAI Realtime by default).
-   - **2b. Your own agent as the brain.** Claude Code, Codex, Hermes, OpenClaw and others answer through `model.provider: "local_agent"` with the [MeetStream Agent Kit](https://github.com/meetstream-ai/agent-kit). Bot price + $0.25 per hour agent infrastructure. Meeting speech reaches an agent that has access to your computer and terminal (prompt injection): use the lowest access level, and keep your computer, the agent and the bridge on for the whole call. Guide: [MIA screen sharing and custom agents](https://docs.meetstream.ai/guides/features/mia-screen-sharing-and-custom-agents).
-3. **Managed agent infrastructure (Agents API, MIA).** MeetStream hosts the agent, with MeetStream's inbuilt keys or your own provider keys. Inbuilt keys work in pipeline mode only: Deepgram (speech-to-text) and OpenAI (LLM and voice). Realtime mode runs on OpenAI and needs your own OpenAI key. Any other provider: bring your own key. Bot price + $0.25 per hour agent infrastructure + the models you pick. See [Voice agent pricing and keys](https://docs.meetstream.ai/guides/mia/pricing-and-keys). A MIA bot takes only `agent_config_id`: do not point a MIA bot at this bridge. Flows 2a and 3 are separate bots.
+1. **Recording bot.** A bot joins, records and transcribes the meeting: 1a non-realtime (post-call: recordings, transcripts, participants, chat and webhooks after the call) or 1b real-time (live data during it). You do not need this repo for that.
+2. **Bridge server (your own stack, local): this repo.** The bot connects out to your server over two WebSockets: live audio in (`live_audio_required.websocket_url`, for example `wss://host/bridge/audio`) and the control socket (`socket_connection_url.websocket_url`, for example `wss://host/bridge`) to send audio, chat, images and interrupts back. You run the speech-to-text, LLM and text-to-speech. On a laptop, expose the server with a local tunnel (ngrok or cloudflared, see [step 2](#2-expose-to-meetstream-tunnel)). MeetStream charges the bot price only ($0.35 per recording hour, $0.25 at volume): no agent infrastructure and no model tokens. Your model provider bills you for what this bridge uses (OpenAI Realtime by default); local models cost nothing to run.
+3. **Agents API infra (MIA, hosted by MeetStream).** Bot price + $0.25 per hour agent infrastructure + the models you pick. 3a: MeetStream's own, default keys (pipeline mode only: Deepgram speech-to-text, OpenAI LLM and voice; realtime mode needs your own OpenAI key). 3b: bring your own agent infra (LiveKit), coming soon. 3c: bring your own keys. 3d: local agent (your own agent CLI, for example Claude Code, Codex or Hermes, through the [MeetStream Agent Kit](https://github.com/meetstream-ai/agent-kit)), coming soon. See [Voice agent pricing and keys](https://docs.meetstream.ai/guides/mia/pricing-and-keys). A hosted agent bot takes only `agent_config_id`: do not point it at this bridge. A bridge bot is a separate bot.
 
 ### Use local models
 
-This repo ships one model stack: OpenAI Realtime through the OpenAI Agents SDK. It has no local model adapters. To run local models (for example Parakeet for speech-to-text, a local LLM and a local TTS), replace the model session in `app/realtime/pipeline.py` (`RealtimeMeetingBridge`) with your own pipeline, and keep the MeetStream side in `app/meetstream/` (frame decoding, resampling, outbound `sendaudio`, `sendmsg` and `interrupt`) as it is. Set `MODEL_AUDIO_RATE` to the sample rate your models expect. The bot price does not change.
+This repo ships one model stack: OpenAI Realtime through the OpenAI Agents SDK. It has no local model adapters. To run your own stack locally, replace the model session in `app/realtime/pipeline.py` (`RealtimeMeetingBridge`) with your own speech-to-text, LLM and text-to-speech pipeline, and keep the MeetStream side in `app/meetstream/` (frame decoding, resampling, outbound `sendaudio`, `sendmsg` and `interrupt`) as it is. Set `MODEL_AUDIO_RATE` to the sample rate your models expect. The bot price does not change.
+
+These options are free to run locally. Check each model's license before commercial use.
+
+| Stage | Free local options |
+|---|---|
+| Speech-to-text | whisper.cpp or faster-whisper (Whisper models), NVIDIA Parakeet (parakeet-mlx on Apple silicon), Vosk, Moonshine |
+| LLM | A local model through Ollama, LM Studio or llama.cpp (Llama, Qwen, Gemma, Mistral), or the model of the harness you already use |
+| Text-to-speech | Piper, Kokoro, Chatterbox, macOS `say` |
+
+The bridge must have a public `wss://` URL even when the models run on your laptop: keep the tunnel from [step 2](#2-expose-to-meetstream-tunnel) running for the whole call.
 
 ## Start here
 
@@ -36,7 +44,7 @@ Check [http://localhost:8000/health](http://localhost:8000/health).
 
 ### 2. Expose to MeetStream (tunnel)
 
-The MeetStream API expects **public** `wss://` URLs, not `localhost`. With the bridge still on port `8000`, start a tunnel in another terminal—for example [ngrok](https://ngrok.com):
+The MeetStream API expects **public** `wss://` URLs, not `localhost`. With the bridge still on port `8000`, start a tunnel in another terminal, for example [ngrok](https://ngrok.com) (or `cloudflared tunnel --url http://localhost:8000` with [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/)):
 
 ```bash
 ngrok http 8000
